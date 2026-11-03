@@ -432,8 +432,10 @@ class Receiver:
     def _within_rate(self, key: str) -> bool:
         if self.config.uploads_per_hour <= 0:
             return True
-        hour = int(time.time() // 3600)
         with self._rate_lock:
+            # Read the clock under the lock: a stale hour could overwrite a live bucket with an
+            # expired one and use up the once-per-hour prune.
+            hour = int(time.time() // 3600)
             if len(self._rate) >= _RATE_KEYS_MAX and key not in self._rate:
                 # Drop only buckets from earlier hours, at most once per hour so a full table is
                 # not rescanned on every refused key. Clearing everything would hand every client
