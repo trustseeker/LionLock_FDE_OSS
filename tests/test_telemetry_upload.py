@@ -609,6 +609,8 @@ def test_a_full_rate_table_keeps_current_budgets_instead_of_resetting_them(
 def test_a_full_rate_table_is_pruned_at_most_once_per_hour(tmp_path, monkeypatch) -> None:
     from lionlock.telemetry import receiver as receiver_module
 
+    # A fixed clock, so an hour boundary between the two checks cannot make the test flaky.
+    monkeypatch.setattr(receiver_module.time, "time", lambda: 1_800_000_000.0)
     monkeypatch.setattr(receiver_module, "_RATE_KEYS_MAX", 2)
     receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server", uploads_per_hour=5))
     assert receiver._within_rate("install:a") and receiver._within_rate("install:b")
