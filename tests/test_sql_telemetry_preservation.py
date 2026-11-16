@@ -25,6 +25,14 @@ AUTH = """
 auth_token_id TEXT CHECK (auth_token_id IS NULL OR length(auth_token_id) >= 12),
 auth_signature TEXT CHECK (auth_signature IS NULL OR length(auth_signature) >= 64)
 """
+KEYS = "writer_id BIGINT, writer_seq BIGINT"
+KEY_INDEX = "lionlock_signals_writer_key"
+KEY_STATEMENTS = f"""
+CREATE UNIQUE INDEX {KEY_INDEX} ON lionlock_signals (writer_id, writer_seq);
+CREATE TABLE lionlock_sql_writers (
+    writer_id BIGINT PRIMARY KEY, sink TEXT NOT NULL, started_utc TEXT NOT NULL
+);
+"""
 
 
 def _execute(path: Path, script: str) -> None:
@@ -55,8 +63,14 @@ def _initialize(path: Path, **options) -> tuple[bool, str]:
     )
 
 
-def _known_database(path: Path, *, current: bool = False) -> None:
-    columns = SIGNALS + ("," + AUTH if current else "")
+def _known_database(path: Path, *, layout: str = "pre_auth") -> None:
+    """A database in one of the layouts the signals table has had, oldest first:
+    ``pre_auth`` (initial OSS), ``pre_key`` (with auth columns) and ``current``."""
+    columns = {
+        "pre_auth": SIGNALS,
+        "pre_key": f"{SIGNALS},{AUTH}",
+        "current": f"{SIGNALS},{AUTH},{KEYS}",
+    }[layout]
     _execute(
         path,
         f"""
@@ -70,8 +84,27 @@ def _known_database(path: Path, *, current: bool = False) -> None:
         CREATE INDEX signal_request_lookup ON lionlock_signals(request_id);
         CREATE TRIGGER retain_signal_trigger AFTER INSERT ON lionlock_signals
             BEGIN INSERT INTO unrelated VALUES ('trigger-fired'); END;
-        """,
+        """
+        + (KEY_STATEMENTS if layout == "current" else ""),
     )
+
+
+def _assert_upgraded(before: tuple, after: tuple, added_columns: int) -> None:
+    """Rows, keys, other tables, indexes and triggers survive; the signals rows gain
+    only NULL columns, and the only new schema objects are the writer key index and
+    the writers table."""
+    (before_schema, before_rows), (after_schema, after_rows) = before, after
+    assert after_rows["lionlock_signals"] == [
+        (*row, *([None] * added_columns)) for row in before_rows["lionlock_signals"]
+    ]
+    for name in before_rows.keys() - {"lionlock_signals"}:
+        assert after_rows[name] == before_rows[name]
+    # The writers table brings the automatic index of its PRIMARY KEY.
+    added = {KEY_INDEX, "lionlock_sql_writers", "sqlite_autoindex_lionlock_sql_writers_1"}
+    assert {row[1] for row in after_schema} - {row[1] for row in before_schema} == added
+    kept = [row for row in after_schema if row[0] in ("index", "trigger") and row[1] not in added]
+    assert kept == [row for row in before_schema if row[0] in ("index", "trigger")]
+    assert after_rows["lionlock_sql_writers"] == []
 
 
 @pytest.mark.parametrize("columns", ["unrelated_value TEXT", "request_id TEXT, extra_value TEXT"])
@@ -100,6 +133,7 @@ def test_foreign_signal_collision_is_refused_without_data_or_schema_changes(tmp_
         SIGNALS.replace("event_pk INTEGER PRIMARY KEY AUTOINCREMENT", "event_pk INTEGER"),
         SIGNALS.replace("request_id TEXT", "request_id INTEGER"),
         SIGNALS + ", extra_value TEXT",
+        f"{SIGNALS}, {KEYS}",
         SIGNALS + ", extra_value TEXT GENERATED ALWAYS AS (request_id) VIRTUAL",
     ],
 )
@@ -174,28 +208,48 @@ def test_crossed_or_duplicate_roles_are_refused_before_mutation(tmp_path, option
 def test_pre_auth_upgrade_preserves_rows_keys_indexes_triggers_and_is_idempotent(tmp_path):
     path = tmp_path / "legacy.db"
     _known_database(path)
-    before_schema, before_rows = _state(path)
+    before = _state(path)
 
     assert _initialize(path)[0]
 
-    after_schema, after_rows = _state(path)
-    assert after_rows["lionlock_signals"] == [(*before_rows["lionlock_signals"][0], None, None)]
-    for name in before_rows.keys() - {"lionlock_signals"}:
-        assert after_rows[name] == before_rows[name]
-    assert [row for row in after_schema if row[0] in ("index", "trigger")] == [
-        row for row in before_schema if row[0] in ("index", "trigger")
-    ]
+    upgraded = _state(path)
+    _assert_upgraded(before, upgraded, added_columns=4)
     with closing(sqlite3.connect(path)) as conn:
         names = {row[1] for row in conn.execute("PRAGMA table_info(lionlock_signals)")}
-        assert {"auth_token_id", "auth_signature"} <= names
-    upgraded = _state(path)
+        assert {"auth_token_id", "auth_signature", "writer_id", "writer_seq"} <= names
     assert _initialize(path)[0]
     assert _state(path) == upgraded
 
 
+def test_pre_key_upgrade_retains_authentication_values_and_sequence(tmp_path):
+    path = tmp_path / "pre-key.db"
+    _known_database(path, layout="pre_key")
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute(
+            "UPDATE lionlock_signals SET auth_token_id=?, auth_signature=?",
+            ("a" * 12, "b" * 64),
+        )
+        conn.commit()
+    before = _state(path)
+
+    assert _initialize(path)[0]
+
+    upgraded = _state(path)
+    _assert_upgraded(before, upgraded, added_columns=2)
+    assert upgraded[1]["sqlite_sequence"] == before[1]["sqlite_sequence"]
+    assert _initialize(path)[0]
+    assert _state(path) == upgraded
+    with closing(sqlite3.connect(path)) as conn:
+        with pytest.raises(sqlite3.IntegrityError):  # The new key is enforced.
+            conn.executescript(
+                "INSERT INTO lionlock_signals (writer_id, writer_seq) VALUES (1, 1);"
+                "INSERT INTO lionlock_signals (writer_id, writer_seq) VALUES (1, 1);"
+            )
+
+
 def test_current_schema_retains_authentication_values_and_sequence(tmp_path):
     path = tmp_path / "current.db"
-    _known_database(path, current=True)
+    _known_database(path, layout="current")
     with closing(sqlite3.connect(path)) as conn:
         conn.execute(
             "UPDATE lionlock_signals SET auth_token_id=?, auth_signature=?",
@@ -210,14 +264,39 @@ def test_current_schema_retains_authentication_values_and_sequence(tmp_path):
     assert _state(path) == before
 
 
+@pytest.mark.parametrize(
+    "index",
+    [
+        f"CREATE INDEX {KEY_INDEX} ON lionlock_signals (writer_id, writer_seq)",
+        f"CREATE UNIQUE INDEX {KEY_INDEX} ON lionlock_signals (writer_seq, writer_id)",
+        f"CREATE UNIQUE INDEX {KEY_INDEX} ON lionlock_signals (writer_id, writer_seq) "
+        "WHERE writer_id > 0",
+    ],
+)
+def test_writer_key_index_name_taken_by_another_index_is_refused(tmp_path, index):
+    path = tmp_path / "index.db"
+    _execute(
+        path,
+        f"CREATE TABLE lionlock_sessions ({SESSIONS});"
+        f"CREATE TABLE lionlock_signals ({SIGNALS},{AUTH},{KEYS});{index};",
+    )
+    before = _state(path)
+
+    ok, _ = _initialize(path)
+
+    assert not ok
+    assert _state(path) == before
+
+
 def test_equivalent_column_order_and_declared_type_case_are_accepted(tmp_path):
     path = tmp_path / "equivalent.db"
     # All statements address columns by name; ordering and declared-type case are immaterial.
     _execute(
         path,
         f"CREATE TABLE lionlock_sessions ({SESSIONS});"
-        f"CREATE TABLE lionlock_signals ({AUTH}, {SIGNALS.lower()});"
-        "INSERT INTO lionlock_signals (event_pk, request_id) VALUES (9, 'retain');",
+        f"CREATE TABLE lionlock_signals ({KEYS.lower()}, {AUTH}, {SIGNALS.lower()});"
+        "INSERT INTO lionlock_signals (event_pk, request_id) VALUES (9, 'retain');"
+        + KEY_STATEMENTS,
     )
     before = _state(path)
 
@@ -231,9 +310,10 @@ def test_existing_extra_constraints_remain_enforced(tmp_path):
     _execute(
         path,
         f"CREATE TABLE lionlock_sessions ({SESSIONS});"
-        f"CREATE TABLE lionlock_signals ({SIGNALS},{AUTH},"
+        f"CREATE TABLE lionlock_signals ({SIGNALS},{AUTH},{KEYS},"
         "UNIQUE(request_id), CHECK (decision <> 'reject'));"
-        "INSERT INTO lionlock_signals (request_id, decision) VALUES ('retain', 'ALLOW');",
+        "INSERT INTO lionlock_signals (request_id, decision) VALUES ('retain', 'ALLOW');"
+        + KEY_STATEMENTS,
     )
     before = _state(path)
 
@@ -394,7 +474,7 @@ def test_session_update_refuses_partial_foreign_schema(tmp_path):
 
 def test_failsafe_refuses_a_crossed_role_and_does_not_insert(tmp_path):
     path = tmp_path / "failsafe.db"
-    _known_database(path, current=True)
+    _known_database(path, layout="current")
     before = _state(path)
 
     ok, message = sql.write_failsafe_blob(

@@ -6,7 +6,7 @@ import sqlite3
 import threading
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
 
 try:
     from sqlalchemy import create_engine, text
@@ -19,10 +19,21 @@ from lionlock.utils.sql_batch_writer import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BACKOFF_MS,
     DEFAULT_STOP_TIMEOUT_S,
+    QueuedEvent,
     SQLBatchWriter,
 )
+from lionlock.utils.sql_writer_keys import (
+    WRITER_KEY_COLUMNS,
+    claim_writer_id_sqlalchemy,
+    claim_writer_id_sqlite,
+    create_writers_table_sql,
+    ensure_sqlalchemy_writer_key,
+    ensure_sqlite_writer_key,
+    stored_seqs_params,
+    stored_seqs_sql,
+)
 
-TRUST_OVERLAY_COLUMNS: List[Tuple[str, str]] = [
+_RECORD_COLUMNS: List[Tuple[str, str]] = [
     ("timestamp", "TEXT"),
     ("session_id", "TEXT"),
     ("turn_index", "INTEGER"),
@@ -41,6 +52,8 @@ TRUST_OVERLAY_COLUMNS: List[Tuple[str, str]] = [
     ("drift_json", "TEXT"),
     ("record_json", "TEXT"),
 ]
+TRUST_OVERLAY_COLUMNS: List[Tuple[str, str]] = [*_RECORD_COLUMNS, *WRITER_KEY_COLUMNS]
+_BASE_COLUMN_NAMES = [name for name, _ in _RECORD_COLUMNS]
 
 _WRITER: "TrustOverlaySQLWriter | None" = None
 _WRITER_KEY: Tuple[Any, ...] | None = None
@@ -89,20 +102,35 @@ def _resolve_sqlite_path(backend: str, dsn: str, sqlite_path: str) -> str | None
     return _sqlite_path_from_dsn(dsn)
 
 
-def _init_sqlite_table(db_path: str, table: str, columns: Iterable[Tuple[str, str]]) -> None:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(_create_table_sql(table, columns))
-        conn.commit()
+def _init_sqlite_tables(
+    db_path: str, table: str, *, timeout_s: float = 5.0, claim_for: str | None = None
+) -> int | None:
+    """Create or upgrade the record and writers tables in one transaction; with
+    ``claim_for``, also claim a writer id for that sink and return it."""
+    if db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(db_path, timeout=timeout_s, isolation_level=None)) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(_create_table_sql(table, TRUST_OVERLAY_COLUMNS))
+            ensure_sqlite_writer_key(conn, table, _BASE_COLUMN_NAMES)
+            conn.execute(create_writers_table_sql())
+            writer_id = claim_writer_id_sqlite(conn, claim_for) if claim_for else None
+            conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+    return writer_id
 
 
-def _init_sqlalchemy_table(uri: str, table: str, columns: Iterable[Tuple[str, str]]) -> None:
-    if create_engine is None or text is None:
+def _init_sqlalchemy_tables(engine: Any, table: str) -> None:
+    if text is None:
         raise RuntimeError("SQLAlchemy is required for non-sqlite Trust Overlay SQL.")
-    engine = create_engine(uri)
-    ddl = _create_table_sql(table, columns)
     with engine.begin() as conn:
-        conn.execute(text(ddl))
+        conn.execute(text(_create_table_sql(table, TRUST_OVERLAY_COLUMNS)))
+        ensure_sqlalchemy_writer_key(conn, table, _BASE_COLUMN_NAMES)
+        conn.execute(text(create_writers_table_sql()))
 
 
 def _normalize_backend(value: str | None) -> str:
@@ -131,13 +159,19 @@ def init_db(config: Dict[str, Any]) -> Tuple[bool, str]:
         if backend == "sqlite3":
             if not sqlite_path:
                 return False, "Trust overlay sqlite_path is empty."
-            _init_sqlite_table(sqlite_path, table, TRUST_OVERLAY_COLUMNS)
+            validate_identifier(table, "trust_overlay.sql.table")
+            _init_sqlite_tables(sqlite_path, table)
             return True, "Initialized trust overlay sqlite table."
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot init trust overlay SQL."
         if not dsn:
             return False, "Trust overlay SQL DSN is empty."
-        _init_sqlalchemy_table(dsn, table, TRUST_OVERLAY_COLUMNS)
+        validate_identifier(table, "trust_overlay.sql.table")
+        engine = create_engine(dsn)
+        try:
+            _init_sqlalchemy_tables(engine, table)
+        finally:
+            engine.dispose()
         return True, "Initialized trust overlay SQL table."
     except Exception as exc:
         return False, f"Trust overlay SQL init failed: {exc}"
@@ -245,25 +279,29 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
         try:
             if self.backend == "sqlite3":
                 assert self.sqlite_path is not None
-                _init_sqlite_table(self.sqlite_path, self.table, TRUST_OVERLAY_COLUMNS)
+                self.writer_id = _init_sqlite_tables(
+                    self.sqlite_path,
+                    self.table,
+                    timeout_s=self.connect_timeout_s,
+                    claim_for=self.sink_name,
+                )
             else:
                 if create_engine is None or text is None:
                     raise RuntimeError("SQLAlchemy not installed.")
                 self.engine = create_engine(self.dsn)
-                ddl = _create_table_sql(self.table, TRUST_OVERLAY_COLUMNS)
-                with self.engine.begin() as conn:
-                    conn.execute(text(ddl))
+                _init_sqlalchemy_tables(self.engine, self.table)
+                self.writer_id = claim_writer_id_sqlalchemy(self.engine, self.sink_name)
         except Exception as exc:
             self.available = False
             self.error = f"Trust overlay SQL init failed: {exc}"
 
-    def _write_batch(self, records: List[Dict[str, Any]]) -> None:
+    def _write_batch(self, items: List[QueuedEvent]) -> None:
         columns = ",".join(name for name, _ in TRUST_OVERLAY_COLUMNS)
         if self.backend == "sqlite3":
             assert self.sqlite_path is not None
             placeholders = ",".join("?" for _ in TRUST_OVERLAY_COLUMNS)
             sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
-            rows = [_record_to_row(record) for record in records]
+            rows = [(*_record_to_row(item.event), self.writer_id, item.seq) for item in items]
             # Closing without a commit rolls back, so a failed insert stores nothing.
             with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
                 conn.executemany(sql, rows)
@@ -273,10 +311,32 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
             raise RuntimeError("SQLAlchemy not installed.")
         values = ",".join(f":{name}" for name, _ in TRUST_OVERLAY_COLUMNS)
         stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
+        named_rows = [
+            {
+                **_record_to_named_row(item.event),
+                "writer_id": self.writer_id,
+                "writer_seq": item.seq,
+            }
+            for item in items
+        ]
         with self.engine.connect() as conn:
             transaction = conn.begin()
-            conn.execute(stmt, [_record_to_named_row(record) for record in records])
+            conn.execute(stmt, named_rows)
             self._commit(transaction.commit)
+
+    def _stored_seqs(self, items: Sequence[QueuedEvent]) -> Set[int]:
+        sql = stored_seqs_sql(self.table)
+        params = stored_seqs_params(self.writer_id, [item.seq for item in items])
+        if self.backend == "sqlite3":
+            assert self.sqlite_path is not None
+            with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
+                rows = conn.execute(sql, params).fetchall()
+        else:
+            if self.engine is None or text is None:
+                raise RuntimeError("SQLAlchemy not installed.")
+            with self.engine.connect() as conn:
+                rows = conn.execute(text(sql), params).fetchall()
+        return {int(row[0]) for row in rows}
 
 
 def get_writer(config: Dict[str, Any]) -> TrustOverlaySQLWriter | None:

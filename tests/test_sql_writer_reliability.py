@@ -3,9 +3,9 @@
 ``SQLTelemetryWriter`` and ``TrustOverlaySQLWriter`` delegate delivery to
 ``lionlock.utils.sql_batch_writer.SQLBatchWriter``. Every test below runs against
 a real SQLite database for both sinks (and through SQLAlchemy when installed).
-Faults are injected deterministically by wrapping ``_write_batch``, and each
-test checks the conservation law
-``enqueued == written + duplicates + failed + dropped + pending``.
+Faults are injected deterministically by wrapping ``_write_batch``, ``_commit``
+or ``_stored_seqs``, and each test checks the conservation law
+``enqueued == written + duplicates + failed + in_doubt + dropped + pending``.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from lionlock.logging.sql_telemetry import PUBLIC_SIGNALS_COLUMNS, SQLTelemetryW
 from lionlock.trust_overlay.sql_sink import TRUST_OVERLAY_COLUMNS, TrustOverlaySQLWriter
 from lionlock.utils.sql_batch_writer import (
     MAX_RETRY_BACKOFF_S,
+    QueuedEvent,
     SQLBatchWriter,
     commit_stored_nothing,
     describe_error,
@@ -83,6 +84,13 @@ class Sink:
             "trust_label": "TRUSTED",
         }
 
+    def stored_keys(self) -> List[tuple]:
+        """``(writer_id, writer_seq)`` of the stored rows, in insertion order."""
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            return conn.execute(
+                f"SELECT writer_id, writer_seq FROM {self.table} ORDER BY rowid"
+            ).fetchall()
+
     def keys(self) -> List[str]:
         """Keys of the stored rows, in insertion order."""
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -120,9 +128,19 @@ def make_sink(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Callab
     family, backend = request.param
     writers: List[SQLBatchWriter] = []
 
-    def factory(table_constraint: str = "", **options: Any) -> Sink:
+    def factory(table_constraint: str = "", pre_key_rows: int = 0, **options: Any) -> Sink:
         db_path = tmp_path / "sink.db"
         table, key_column, columns = SCHEMAS[family]
+        if pre_key_rows:
+            # The layout before writer keys existed, holding rows written back then.
+            definitions = [f"{name} {col_type}" for name, col_type in columns[:-2]]
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute(f"CREATE TABLE {table} ({', '.join(definitions)})")
+                conn.execute(f"CREATE INDEX {table}_lookup ON {table} ({key_column})")
+                for index in range(pre_key_rows):
+                    conn.execute(
+                        f"INSERT INTO {table} ({key_column}) VALUES (?)", (f"old-{index}",)
+                    )
         if table_constraint:
             # Pre-create the table; the writer's CREATE TABLE IF NOT EXISTS keeps it.
             definitions = [f"{name} {col_type}" for name, col_type in columns]
@@ -167,17 +185,17 @@ def make_sink(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Callab
 def wrap_writes(
     monkeypatch: pytest.MonkeyPatch,
     writer: SQLBatchWriter,
-    before: Callable[[int, List[Dict[str, Any]]], None],
+    before: Callable[[int, List[QueuedEvent]], None],
 ) -> List[float]:
-    """Run ``before(call_number, events)`` ahead of every real write (it may raise
+    """Run ``before(call_number, items)`` ahead of every real write (it may raise
     or block). Returns the monotonic start time of each write call."""
     real_write = writer._write_batch
     starts: List[float] = []
 
-    def write(events: List[Dict[str, Any]]) -> None:
+    def write(items: List[QueuedEvent]) -> None:
         starts.append(time.monotonic())
-        before(len(starts), events)
-        real_write(events)
+        before(len(starts), items)
+        real_write(items)
 
     monkeypatch.setattr(writer, "_write_batch", write)
     return starts
@@ -247,7 +265,7 @@ def test_stop_is_time_bounded_when_a_write_hangs(
     writer = sink.writer
     entered, release = threading.Event(), threading.Event()
 
-    def hang_first_write(call: int, events: List[Dict[str, Any]]) -> None:
+    def hang_first_write(call: int, items: List[QueuedEvent]) -> None:
         if call == 1:
             entered.set()
             release.wait(timeout=30)  # A database call that hangs.
@@ -290,7 +308,7 @@ def test_stop_deadline_ends_retries_of_a_persistent_failure(
     sink = make_sink(batch_size=1, max_retries=1_000_000, retry_backoff_ms=100)
     writer = sink.writer
 
-    def always_locked(call: int, events: List[Dict[str, Any]]) -> None:
+    def always_locked(call: int, items: List[QueuedEvent]) -> None:
         raise sink.transient_error()
 
     wrap_writes(monkeypatch, writer, always_locked)
@@ -361,7 +379,7 @@ def test_transient_errors_are_retried_with_backoff(
     sink = make_sink(batch_size=3, retry_backoff_ms=20)
     writer = sink.writer
 
-    def locked_three_times(call: int, events: List[Dict[str, Any]]) -> None:
+    def locked_three_times(call: int, items: List[QueuedEvent]) -> None:
         if call <= 3:
             raise sink.transient_error()
 
@@ -390,7 +408,7 @@ def test_exhausted_retries_count_failed_and_writer_keeps_running(
     writer = sink.writer
     healthy = threading.Event()
 
-    def locked_until_healthy(call: int, events: List[Dict[str, Any]]) -> None:
+    def locked_until_healthy(call: int, items: List[QueuedEvent]) -> None:
         if not healthy.is_set():
             raise sink.transient_error()
 
@@ -416,12 +434,9 @@ def test_exhausted_retries_count_failed_and_writer_keeps_running(
     assert_conserved(final)
 
 
-def test_commit_with_unknown_outcome_is_never_replayed(
-    make_sink: Callable[..., Sink],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+def test_commit_with_unknown_outcome_is_confirmed_not_replayed(
+    make_sink: Callable[..., Sink], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="lionlock.utils.sql_batch_writer")
     sink = make_sink(batch_size=3)
     writer = sink.writer
 
@@ -434,16 +449,146 @@ def test_commit_with_unknown_outcome_is_never_replayed(
         assert writer.enqueue(sink.event(key))
     wait_for(lambda: writer.stats()["pending"] == 0)
 
-    # Replaying the batch, or its rows one by one, would store every row twice.
+    # The retry looked the keys up, found all three, and inserted nothing again.
     assert sink.keys() == ["a", "b", "c"]
     assert len(commits) == 1
     stats = writer.stats()
-    assert (stats["written"], stats["in_doubt"], stats["failed"], stats["retries"]) == (0, 3, 0, 0)
+    assert (stats["written"], stats["in_doubt"], stats["reconciled"], stats["retries"]) == (
+        3,
+        0,
+        3,
+        1,
+    )
     assert (writer.last_error or "").startswith("commit outcome unknown: ")
-    assert writer.available and writer.error is None
-    assert any("sql_sink_commit_outcome_unknown" in r.getMessage() for r in caplog.records)
     writer.stop()
     assert_conserved(writer.stats())
+
+
+def test_commit_with_unknown_outcome_that_stored_nothing_is_inserted_once(
+    make_sink: Callable[..., Sink], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sink = make_sink(batch_size=3)
+    writer = sink.writer
+
+    def lose_connection_before_commit_once(call: int, commit: Callable[[], Any]) -> None:
+        if call == 1:
+            raise sink.lost_connection_error()  # Outcome unknown; in fact nothing stored.
+        commit()
+
+    commits = wrap_commits(monkeypatch, writer, lose_connection_before_commit_once)
+    for key in ["a", "b", "c"]:
+        assert writer.enqueue(sink.event(key))
+    wait_for(lambda: writer.stats()["pending"] == 0)
+
+    assert sink.keys() == ["a", "b", "c"]
+    assert len(commits) == 2
+    stats = writer.stats()
+    assert (stats["written"], stats["in_doubt"], stats["reconciled"], stats["retries"]) == (
+        3,
+        0,
+        0,
+        1,
+    )
+    writer.stop()
+    assert_conserved(writer.stats())
+
+
+def test_unique_key_backstops_a_lookup_that_misses_a_late_commit(
+    make_sink: Callable[..., Sink], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In PostgreSQL an unacknowledged COMMIT can still be finishing when the writer
+    looks its keys up. Simulated here by hiding the stored rows from the first lookup:
+    the re-insert must then hit the UNIQUE key, not store a second copy."""
+    sink = make_sink(batch_size=3)
+    writer = sink.writer
+
+    def commit_then_lose_connection(call: int, commit: Callable[[], Any]) -> None:
+        commit()
+        if call == 1:
+            raise sink.lost_connection_error()
+
+    wrap_commits(monkeypatch, writer, commit_then_lose_connection)
+    real_lookup = writer._stored_seqs
+    lookups: List[int] = []
+
+    def lookup(items: Any) -> set:
+        lookups.append(len(lookups) + 1)
+        return set() if len(lookups) == 1 else real_lookup(items)
+
+    monkeypatch.setattr(writer, "_stored_seqs", lookup)
+    for key in ["a", "b", "c"]:
+        assert writer.enqueue(sink.event(key))
+    wait_for(lambda: writer.stats()["pending"] == 0)
+
+    assert sink.keys() == ["a", "b", "c"]  # Stored once, never twice.
+    assert len(lookups) == 2
+    stats = writer.stats()
+    assert (stats["written"], stats["duplicates"], stats["in_doubt"], stats["reconciled"]) == (
+        3,
+        0,
+        0,
+        3,
+    )
+    writer.stop()
+    assert_conserved(writer.stats())
+
+
+def test_unresolved_unknown_outcome_is_in_doubt_and_stored_at_most_once(
+    make_sink: Callable[..., Sink],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="lionlock.utils.sql_batch_writer")
+    sink = make_sink(batch_size=3, max_retries=2)
+    writer = sink.writer
+
+    def commit_then_lose_connection(call: int, commit: Callable[[], Any]) -> None:
+        commit()
+        raise sink.lost_connection_error()
+
+    wrap_commits(monkeypatch, writer, commit_then_lose_connection)
+
+    def lookup_unreachable(items: Any) -> set:
+        raise sink.transient_error()
+
+    monkeypatch.setattr(writer, "_stored_seqs", lookup_unreachable)
+    for key in ["a", "b", "c"]:
+        assert writer.enqueue(sink.event(key))
+    wait_for(lambda: writer.stats()["pending"] == 0)
+
+    # The outcome could not be resolved before the retries ran out: in_doubt, never
+    # a second insert without a lookup first.
+    assert sink.keys() == ["a", "b", "c"]
+    stats = writer.stats()
+    assert (stats["written"], stats["in_doubt"], stats["failed"], stats["retries"]) == (0, 3, 0, 2)
+    assert writer.available and writer.error is None
+    writer.stop()  # Joins the worker, so its warning has been logged.
+    assert any("sql_sink_commit_outcome_unknown" in r.getMessage() for r in caplog.records)
+    assert_conserved(writer.stats())
+
+
+def test_keys_are_deterministic_and_enforced_by_the_database(
+    make_sink: Callable[..., Sink],
+) -> None:
+    first = make_sink(batch_size=10)
+    for key in ["a", "b", "c"]:
+        assert first.writer.enqueue(first.event(key))
+    first.writer.stop()
+    # A second writer on the same database is assigned the next id; no randomness.
+    second = make_sink(batch_size=10)
+    assert second.writer.enqueue(second.event("d"))
+    second.writer.stop()
+
+    assert (first.writer.writer_id, second.writer.writer_id) == (1, 2)
+    assert first.stored_keys() == [(1, 1), (1, 2), (1, 3), (2, 1)]
+    with closing(sqlite3.connect(first.db_path)) as conn:
+        writers = conn.execute("SELECT writer_id, sink FROM lionlock_sql_writers").fetchall()
+        assert writers == [(1, first.writer.sink_name), (2, second.writer.sink_name)]
+        with pytest.raises(sqlite3.IntegrityError):  # The database refuses a second copy.
+            conn.execute(
+                f"INSERT INTO {first.table} ({first.key_column}, writer_id, writer_seq) "
+                "VALUES ('replay', 1, 2)"
+            )
 
 
 def test_commit_failure_that_stored_nothing_is_retried(
@@ -481,7 +626,7 @@ def test_full_queue_evicts_oldest_and_counts_every_drop(
     assert writer.max_queue_size == 100
     entered, release = threading.Event(), threading.Event()
 
-    def hold_first_batch(call: int, events: List[Dict[str, Any]]) -> None:
+    def hold_first_batch(call: int, items: List[QueuedEvent]) -> None:
         if call == 1:
             entered.set()
             release.wait(timeout=30)
@@ -504,6 +649,8 @@ def test_full_queue_evicts_oldest_and_counts_every_drop(
     writer.stop(timeout_s=30)
 
     assert sink.keys() == keys[:10] + keys[17:]  # The 7 oldest queued events were evicted.
+    # Each evicted event left a gap in the stored sequence numbers, exactly where it was.
+    assert [seq for _, seq in sink.stored_keys()] == list(range(1, 11)) + list(range(18, 118))
     final = writer.stats()
     assert (final["written"], final["dropped"], final["pending"]) == (110, 7, 0)
     assert_conserved(final)
@@ -621,3 +768,54 @@ def test_error_classification_through_sqlalchemy(tmp_path: Path) -> None:
     code = getattr(errors["unique"], "sqlite_errorname", None)  # Python 3.11+
     label = f"IntegrityError [{code}]" if code else "IntegrityError"
     assert describe_error(wrapped) == f"{label}: UNIQUE constraint failed: t.name"
+
+
+def test_existing_table_is_upgraded_in_place_and_keeps_its_rows(
+    make_sink: Callable[..., Sink],
+) -> None:
+    sink = make_sink(batch_size=10, pre_key_rows=2)
+    assert sink.writer.enqueue(sink.event("new"))
+    sink.writer.stop()
+
+    assert sink.keys() == ["old-0", "old-1", "new"]
+    # Rows from before the upgrade keep NULL keys; a UNIQUE index never equates NULLs.
+    assert sink.stored_keys() == [(None, None), (None, None), (1, 1)]
+    with closing(sqlite3.connect(sink.db_path)) as conn:
+        indexes = {
+            name: unique for _, name, unique, *_ in conn.execute(f"PRAGMA index_list({sink.table})")
+        }
+    assert indexes == {f"{sink.table}_lookup": 0, f"{sink.table}_writer_key": 1}
+    # Starting again changes nothing but claiming the next writer id.
+    again = make_sink(batch_size=10)
+    again.writer.stop()
+    assert again.writer.writer_id == 2
+    assert sink.stored_keys() == [(None, None), (None, None), (1, 1)]
+
+
+@pytest.mark.parametrize("family", ["telemetry", "trust_overlay"])
+def test_foreign_table_is_refused_without_changes(tmp_path: Path, family: str) -> None:
+    db_path = tmp_path / "foreign.db"
+    table, _, _ = SCHEMAS[family]
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(f"CREATE TABLE {table} (value TEXT)")
+        conn.execute(f"INSERT INTO {table} VALUES ('retain')")
+    writer: SQLBatchWriter
+    if family == "telemetry":
+        writer = SQLTelemetryWriter(f"sqlite:///{db_path}", table, "lionlock_sessions", 10, 1000, 1)
+    else:
+        writer = TrustOverlaySQLWriter(
+            backend="sqlite3",
+            dsn="",
+            sqlite_path=str(db_path),
+            table=table,
+            batch_size=10,
+            flush_interval_ms=1000,
+            connect_timeout_s=1,
+        )
+    writer.stop()
+    assert not writer.available
+    assert "incompatible" in (writer.error or "").lower()
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute(f"SELECT * FROM {table}").fetchall() == [("retain",)]
+        names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+    assert names == {table}  # Nothing created, nothing altered.
