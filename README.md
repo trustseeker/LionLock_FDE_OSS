@@ -115,3 +115,5 @@ See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) and the [Code of Conduct](COD
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+The licence covers the code. Use of the LionLock name and logo is covered by [`TRADEMARK.md`](TRADEMARK.md).
