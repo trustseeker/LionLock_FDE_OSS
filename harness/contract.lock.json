@@ -1,7 +1,7 @@
 {
   "files": {
     ".devcontainer/devcontainer.json": "5ff0139e904a6a7e29c6167eafe9cbcd8ae492c0ac2f56fad3dc74dd112d5dcf",
-    ".github/workflows/verify.yml": "8238bfc1a20a5106a4828589e5273ecc279f2af1e94c63ee99b3b5b575ed2dd2",
+    ".github/workflows/verify.yml": "bd213d98e4f089a1bf2ae6c8837f8c64831008e3caf5361e4fcf4dac088e686a",
     ".python-version": "7b55f8e67b5623c4bef3fa691288da9437d79d3aba156de48d481db32ac7d16d",
     "AGENTS.md": "fd6facdf9cbfd1c14893dbbb51e70bbd7a2a57a1eb855b707de54b5f135cc7f2",
     "GEMINI.md": "9f043aeed003a80df8aa9fc7890d0bbcc9ced27f8dfec2a5f5940e21ff9615b9",
