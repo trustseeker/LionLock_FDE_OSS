@@ -152,8 +152,10 @@ def parse_porcelain(output: str) -> tuple[tuple[str, str], ...]:
         if len(line) < 4:
             continue
         status, path = line[:2], line[3:].strip().strip('"')
-        # Renames read "old -> new"; only the destination matters.
-        path = path.split(" -> ")[-1].strip().strip('"')
+        # Renames and copies read "old -> new"; only the destination matters. Any other entry's
+        # path is literal, and may itself contain " -> " (git quotes it, it does not escape it).
+        if "R" in status or "C" in status:
+            path = path.split(" -> ")[-1].strip().strip('"')
         if path:
             entries.append((status, path))
     return tuple(sorted(entries))

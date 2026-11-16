@@ -45,6 +45,17 @@ def test_rename_reports_the_destination() -> None:
     assert parse_porcelain("R  old/name.py -> new/name.py") == (("R ", "new/name.py"),)
 
 
+def test_arrow_in_a_non_rename_path_is_kept_whole() -> None:
+    """Only renames and copies carry "old -> new"; any other path containing " -> " is literal.
+
+    Splitting it reported "b.txt" for an untracked "a -> b.txt", which the privacy scan then
+    skipped as not a file, so that file's contents were never scanned.
+    """
+    assert parse_porcelain('?? "a -> b.txt"\n') == (("??", "a -> b.txt"),)
+    assert parse_porcelain(' M "a -> b.txt"\n') == ((" M", "a -> b.txt"),)
+    assert parse_porcelain("C  src.py -> copy.py\n") == (("C ", "copy.py"),)
+
+
 def test_quoted_paths_are_unquoted() -> None:
     assert parse_porcelain(' M "harness/a file.py"') == ((" M", "harness/a file.py"),)
 
