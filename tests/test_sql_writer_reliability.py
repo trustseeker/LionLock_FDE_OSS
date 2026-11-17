@@ -591,6 +591,100 @@ def test_keys_are_deterministic_and_enforced_by_the_database(
             )
 
 
+@pytest.mark.parametrize(
+    "reset",
+    ["DELETE FROM lionlock_sql_writers", "DROP TABLE lionlock_sql_writers"],
+    ids=["emptied", "dropped"],
+)
+def test_a_reset_writers_table_never_hands_out_an_id_already_stored(
+    make_sink: Callable[..., Sink], reset: str
+) -> None:
+    """The writers table can be emptied, dropped or restored from an older backup while
+    the sink table keeps its rows. A new writer must still get an id whose keys are not
+    stored, or every one of its events collides with an old row and is lost."""
+    first = make_sink(batch_size=10)
+    for key in ["a", "b", "c"]:
+        assert first.writer.enqueue(first.event(key))
+    first.writer.stop()
+    with closing(sqlite3.connect(first.db_path)) as conn, conn:
+        conn.execute(reset)
+
+    second = make_sink(batch_size=10)
+    for key in ["d", "e", "f"]:
+        assert second.writer.enqueue(second.event(key))
+    second.writer.stop()
+
+    assert second.writer.writer_id == 2
+    assert first.keys() == ["a", "b", "c", "d", "e", "f"]
+    assert first.stored_keys() == [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)]
+    stats = second.writer.stats()
+    assert (stats["written"], stats["duplicates"], stats["failed"]) == (3, 0, 0)
+    assert_conserved(stats)
+
+
+def test_a_writer_key_collision_is_a_loud_failure_not_a_duplicate(
+    make_sink: Callable[..., Sink], caplog: pytest.LogCaptureFixture
+) -> None:
+    """If another writer has stored a row under this writer's id, the UNIQUE key refuses
+    this writer's event at that key. The event was not stored, so it must never be
+    counted as a duplicate, which means "already stored"."""
+    caplog.set_level(logging.WARNING, logger="lionlock.utils.sql_batch_writer")
+    sink = make_sink(batch_size=3)
+    writer = sink.writer
+    # Another writer holding the same id has already stored this writer's second key.
+    with closing(sqlite3.connect(sink.db_path)) as conn, conn:
+        conn.execute(
+            f"INSERT INTO {sink.table} ({sink.key_column}, writer_id, writer_seq) "
+            "VALUES ('foreign', ?, 2)",
+            (writer.writer_id,),
+        )
+    for key in ["a", "b", "c"]:
+        assert writer.enqueue(sink.event(key))
+    writer.stop()  # Joins the worker, so its log lines have been emitted.
+
+    assert sink.keys() == ["foreign", "a", "c"]  # The other writer's row is untouched.
+    stats = writer.stats()
+    assert (stats["written"], stats["duplicates"], stats["failed"], stats["key_collisions"]) == (
+        2,
+        0,
+        1,
+        1,
+    )
+    assert (writer.last_error or "").startswith("writer key collision")
+    collisions = [r for r in caplog.records if "sql_sink_writer_key_collision" in r.getMessage()]
+    assert [r.levelno for r in collisions] == [logging.ERROR]
+    assert_conserved(stats)
+
+
+def test_a_duplicate_that_cannot_be_confirmed_is_not_counted_as_stored(
+    make_sink: Callable[..., Sink], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counting an event as a duplicate claims it is already stored. When the key
+    lookup that confirms it fails, the event is counted as failed instead."""
+    sink = make_sink(batch_size=2, table_constraint="UNIQUE ({key})")
+    sink.insert_existing("dup")
+    writer = sink.writer
+
+    def lookup_broken(items: Any) -> set:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(writer, "_stored_seqs", lookup_broken)
+    for key in ["a", "dup"]:
+        assert writer.enqueue(sink.event(key))
+    writer.stop()
+
+    assert sink.keys() == ["dup", "a"]
+    stats = writer.stats()
+    assert (stats["written"], stats["duplicates"], stats["failed"], stats["key_collisions"]) == (
+        1,
+        0,
+        1,
+        0,
+    )
+    assert (writer.last_error or "").startswith("duplicate not confirmed")
+    assert_conserved(stats)
+
+
 def test_commit_failure_that_stored_nothing_is_retried(
     make_sink: Callable[..., Sink], monkeypatch: pytest.MonkeyPatch
 ) -> None:

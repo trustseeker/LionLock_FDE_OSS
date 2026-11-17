@@ -115,7 +115,7 @@ def _init_sqlite_tables(
             conn.execute(_create_table_sql(table, TRUST_OVERLAY_COLUMNS))
             ensure_sqlite_writer_key(conn, table, _BASE_COLUMN_NAMES)
             conn.execute(create_writers_table_sql())
-            writer_id = claim_writer_id_sqlite(conn, claim_for) if claim_for else None
+            writer_id = claim_writer_id_sqlite(conn, claim_for, table) if claim_for else None
             conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:
@@ -290,7 +290,7 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
                     raise RuntimeError("SQLAlchemy not installed.")
                 self.engine = create_engine(self.dsn)
                 _init_sqlalchemy_tables(self.engine, self.table)
-                self.writer_id = claim_writer_id_sqlalchemy(self.engine, self.sink_name)
+                self.writer_id = claim_writer_id_sqlalchemy(self.engine, self.sink_name, self.table)
         except Exception as exc:
             self.available = False
             self.error = f"Trust overlay SQL init failed: {exc}"

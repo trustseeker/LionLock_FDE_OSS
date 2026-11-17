@@ -247,6 +247,41 @@ def test_pre_key_upgrade_retains_authentication_values_and_sequence(tmp_path):
             )
 
 
+def _documented_rollback_sql() -> str:
+    """The rollback block from docs/AUDIT_LOGGING.md, run as written so the documented
+    steps cannot drift from what is tested."""
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "AUDIT_LOGGING.md").read_text(
+        encoding="utf-8"
+    )
+    start = doc.index("```sql\n", doc.index("<!-- rollback-sql")) + len("```sql\n")
+    return doc[start : doc.index("```", start)]
+
+
+def test_documented_rollback_returns_signals_to_the_layout_earlier_releases_accept(tmp_path):
+    path = tmp_path / "rollback.db"
+    _known_database(path, layout="pre_key")
+    before = _state(path)
+    assert _initialize(path)[0]  # Upgraded: two key columns, the key index, the writers table.
+
+    _execute(path, _documented_rollback_sql())
+
+    after = _state(path)
+    for name, rows in before[1].items():
+        assert after[1][name] == rows  # Every row of every table is as before the upgrade.
+    names = {row[1] for row in after[0]} - {row[1] for row in before[0]}
+    assert names == {"lionlock_sql_writers", "sqlite_autoindex_lionlock_sql_writers_1"}
+    kept = [row for row in after[0] if row[0] in ("index", "trigger") and row[1] not in names]
+    assert kept == [row for row in before[0] if row[0] in ("index", "trigger")]
+    # The exact comparison the schema check of earlier releases makes.
+    with closing(sqlite3.connect(path)) as conn:
+        actual = {
+            row[1].lower(): (" ".join(row[2].upper().split()), row[5], row[6])
+            for row in conn.execute("PRAGMA main.table_xinfo(lionlock_signals)")
+        }
+    assert actual == sql._sqlite_shape(sql.PUBLIC_SIGNALS_COLUMNS[:-2])
+    assert _initialize(path)[0]  # Upgrading again later is accepted.
+
+
 def test_current_schema_retains_authentication_values_and_sequence(tmp_path):
     path = tmp_path / "current.db"
     _known_database(path, layout="current")

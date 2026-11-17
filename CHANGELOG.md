@@ -45,6 +45,12 @@ From a full review of `src/` after the move to fully open source. Each fix has a
   inserts only the rest. Events are counted as `in_doubt` only when the outcome is still unknown
   after the retries. Writer ids are assigned by the database, so the keys involve no randomness.
   A new `reconciled` counter reports events found already stored.
+- **A writer id is never reused, and a key collision is never reported as a duplicate.** The next
+  id is claimed above every id in both the writers table and the sink table, so emptying or
+  dropping `lionlock_sql_writers` cannot make new events collide with stored ones. A UNIQUE
+  violation is counted as `duplicates` only after a lookup confirms the event's own key is free;
+  if another writer holds the key, the event is counted as `failed` and `key_collisions` and
+  logged at ERROR level.
 
 ### Compatibility
 
@@ -68,6 +74,11 @@ From a full review of `src/` after the move to fully open source. Each fix has a
   rows (with NULL keys). This needs privileges to alter the table and create the index, and
   building the index takes one pass over a large table. A Trust Overlay table missing any of the
   sink's columns is now refused at startup instead of failing every insert.
+- **The upgrade is one-way for native SQLite telemetry databases.** Earlier code that checks the
+  telemetry schema, including the source the README currently pins for 1.0.0b2, refuses an
+  upgraded `lionlock_signals`. 1.0.0b1, Trust Overlay tables and telemetry through SQLAlchemy keep
+  working. `docs/AUDIT_LOGGING.md` ("Going back to an earlier release") gives the tested SQL that
+  restores the earlier layout.
 
 ## 1.0.0b2 — security and data-preservation fixes
 

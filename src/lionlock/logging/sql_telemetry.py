@@ -454,13 +454,13 @@ class SQLTelemetryWriter(SQLBatchWriter):
                     ],
                     timeout_s=self.connect_timeout_s,
                 ) as conn:
-                    self.writer_id = claim_writer_id_sqlite(conn, self.sink_name)
+                    self.writer_id = claim_writer_id_sqlite(conn, self.sink_name, self.table)
             else:
                 if create_engine is None or text is None:
                     raise RuntimeError("SQLAlchemy not installed.")
                 self.engine = create_engine(self.uri)
                 _init_sqlalchemy_tables(self.engine, self.sessions_table, self.table)
-                self.writer_id = claim_writer_id_sqlalchemy(self.engine, self.sink_name)
+                self.writer_id = claim_writer_id_sqlalchemy(self.engine, self.sink_name, self.table)
         except Exception as exc:
             self.available = False
             self.error = f"SQL telemetry init failed: {exc}"

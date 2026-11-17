@@ -1,12 +1,14 @@
 """Schema for the idempotency keys of LionLock's opt-in SQL sinks.
 
 Every row a sink stores carries ``(writer_id, writer_seq)``. ``writer_id`` is
-claimed once per writer from ``lionlock_sql_writers``: the next integer, inserted
-under that table's PRIMARY KEY, so two writers can never share one, with or
-without concurrency. ``writer_seq`` is the writer's own counter (see
-``SQLBatchWriter.enqueue``). A UNIQUE index on the pair lets the database refuse
-a second copy of any event, which is what makes retrying a COMMIT with an unknown
-outcome safe.
+claimed once per writer: one above the highest id in ``lionlock_sql_writers`` and
+in the sink's own table, inserted under the writers table's PRIMARY KEY, so two
+writers can never share one, with or without concurrency. Reading the sink table
+too means a writers table that was emptied, dropped or restored from an older
+backup cannot hand out an id whose keys are already stored. ``writer_seq`` is the
+writer's own counter (see ``SQLBatchWriter.enqueue``). A UNIQUE index on the pair
+lets the database refuse a second copy of any event, which is what makes retrying
+a COMMIT with an unknown outcome safe.
 
 Existing tables are upgraded by adding the two nullable columns and the index.
 Rows stored before the upgrade keep NULL keys, which a UNIQUE index never treats
@@ -53,6 +55,21 @@ def create_writer_key_index_sql(table: str) -> str:
 def create_writers_table_sql() -> str:
     columns = ", ".join(f"{name} {definition}" for name, definition in WRITERS_COLUMNS)
     return f"CREATE TABLE IF NOT EXISTS {WRITERS_TABLE} ({columns})"
+
+
+def next_writer_id_sql(table: str) -> str:
+    """One above the highest writer id in the writers table and in ``table``.
+
+    The writers table alone is not enough: if it is emptied, dropped or restored from
+    an older backup, its MAX restarts while the sink table still holds keys under the
+    old ids, and a reused id makes every new event collide with a stored row.
+    """
+    return (
+        "SELECT COALESCE(MAX(writer_id), 0) + 1 FROM ("
+        f"SELECT MAX(writer_id) AS writer_id FROM {WRITERS_TABLE} "
+        f"UNION ALL SELECT MAX(writer_id) AS writer_id FROM {_checked(table)}"
+        ") AS claimed"
+    )
 
 
 def stored_seqs_sql(table: str) -> str:
@@ -120,11 +137,10 @@ def ensure_sqlite_writer_key_index(conn: sqlite3.Connection, table: str) -> None
         conn.execute(create_writer_key_index_sql(table))
 
 
-def claim_writer_id_sqlite(conn: sqlite3.Connection, sink: str) -> int:
-    """Claim the next writer id. The caller holds the write lock (``BEGIN IMMEDIATE``)."""
-    (writer_id,) = conn.execute(
-        f"SELECT COALESCE(MAX(writer_id), 0) + 1 FROM {WRITERS_TABLE}"
-    ).fetchone()
+def claim_writer_id_sqlite(conn: sqlite3.Connection, sink: str, table: str) -> int:
+    """Claim the next writer id for a sink that writes to ``table``. The caller holds
+    the write lock (``BEGIN IMMEDIATE``)."""
+    (writer_id,) = conn.execute(next_writer_id_sql(table)).fetchone()
     conn.execute(
         f"INSERT INTO {WRITERS_TABLE} (writer_id, sink, started_utc) VALUES (?, ?, ?)",
         (writer_id, sink, _utc_now()),
@@ -162,8 +178,9 @@ def ensure_sqlalchemy_writer_key(conn: Any, table: str, base_columns: Sequence[s
         conn.execute(text(create_writer_key_index_sql(table)))
 
 
-def claim_writer_id_sqlalchemy(engine: Any, sink: str) -> int:
-    """Claim the next writer id in its own transaction.
+def claim_writer_id_sqlalchemy(engine: Any, sink: str, table: str) -> int:
+    """Claim the next writer id for a sink that writes to ``table``, in its own
+    transaction.
 
     In PostgreSQL the claim locks the writers table first (a mode that still lets
     other sessions read it), so writers starting together claim one after another
@@ -177,9 +194,7 @@ def claim_writer_id_sqlalchemy(engine: Any, sink: str) -> int:
             with engine.begin() as conn:
                 if conn.dialect.name == "postgresql":
                     conn.execute(text(f"LOCK TABLE {WRITERS_TABLE} IN SHARE ROW EXCLUSIVE MODE"))
-                writer_id = conn.execute(
-                    text(f"SELECT COALESCE(MAX(writer_id), 0) + 1 FROM {WRITERS_TABLE}")
-                ).scalar_one()
+                writer_id = conn.execute(text(next_writer_id_sql(table))).scalar_one()
                 conn.execute(
                     text(
                         f"INSERT INTO {WRITERS_TABLE} (writer_id, sink, started_utc) "
