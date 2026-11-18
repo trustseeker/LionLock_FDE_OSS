@@ -3,8 +3,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from statistics import pstdev
 from typing import Any, Iterable
+
+from lionlock.core.numeric import pstdev
 
 from .config import (
     DEFAULT_PROFILE,

@@ -95,21 +95,29 @@ FORBIDDEN_THIRD_PARTY = frozenset(
 # scoring or gating; the behavioural tests above are what establish that.
 #
 #   socket     <- email.utils          selectors  <- socket
-#   urllib     <- pathlib (as_uri)     random     <- statistics (core uses pstdev)
+#   urllib     <- pathlib (as_uri)
 #
 # Which of these appear depends on the interpreter, because the standard library keeps making its
 # own imports lazier: 3.11 and 3.12 load socket, selectors and urllib, and 3.13 loads none of the
 # three. That is why this is asserted as a subset rather than an exact set. A new entry is a
 # regression worth failing on; a disappearing one means the surface shrank, which is the direction
 # we want, and must not fail a test. (uuid and secrets were allowed here while pydantic validated
-# payloads; they are no longer loaded by the scoring core on 3.10 to 3.14.)
-CORE_ALLOWED_STDLIB = frozenset({"socket", "selectors", "urllib", "random"})
+# payloads, and random while scoring used statistics.pstdev; since 1.0.0b2 the scoring core loads
+# none of the three on 3.10 to 3.14.)
+CORE_ALLOWED_STDLIB = frozenset({"socket", "selectors", "urllib"})
 
-# The telemetry and trust-overlay path additionally loads the opt-in uploader and the local log, so
-# a TLS and HTTP client and SQLite are resident, and the store and token auth use uuid and secrets.
-# Pinned so the surface cannot grow unnoticed. See the module docstring: making this set smaller is
-# the fix, and the subset check welcomes it.
-TELEMETRY_ALLOWED_STDLIB = CORE_ALLOWED_STDLIB | {"ssl", "http", "sqlite3", "uuid", "secrets"}
+# The telemetry and trust-overlay path additionally loads the opt-in uploader (which uses random
+# for retry jitter) and the local log, so a TLS and HTTP client and SQLite are resident, and the
+# store and token auth use uuid and secrets. Pinned so the surface cannot grow unnoticed. See the
+# module docstring: making this set smaller is the fix, and the subset check welcomes it.
+TELEMETRY_ALLOWED_STDLIB = CORE_ALLOWED_STDLIB | {
+    "ssl",
+    "http",
+    "sqlite3",
+    "uuid",
+    "secrets",
+    "random",
+}
 
 # Third-party compiled extensions the scoring core may have resident. A C extension can call
 # connect(2) without going through Python's socket module, so ``network_blocked`` cannot see one.
