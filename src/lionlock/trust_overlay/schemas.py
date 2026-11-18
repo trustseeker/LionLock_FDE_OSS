@@ -49,7 +49,19 @@ ALLOWED_FIELDS = {
     "trigger_flags",
     "response_hash",
     "pseudonymous_user_key",
+    "hash_scheme",
 }
+
+# Which hashing rules a record was written under. Records without the field predate it: their
+# response_hash may be an unkeyed SHA-256 of the reply, and their deployment_context_snapshot may
+# hold unkeyed SHA-256 digests of the hostname and container ID.
+HASH_SCHEME_KEYED = "keyed-v1"  # response_hash is LionLock's keyed HMAC-SHA256 of the reply
+HASH_SCHEME_CALLER = "caller"  # response_hash was supplied by the caller, stored as given
+HASH_SCHEME_NONE = "none"  # no response_hash
+HASH_SCHEMES = {HASH_SCHEME_KEYED, HASH_SCHEME_CALLER, HASH_SCHEME_NONE}
+
+# Unkeyed digests of a hostname or container ID are guessable; records no longer carry them.
+UNKEYED_HOST_HASH_KEYS = ("host_id_hash", "container_id_hash")
 
 REQUIRED_FIELDS = {
     "trust_logic_version",
@@ -106,6 +118,7 @@ class TrustRecord:
     trigger_flags: list[str]
     response_hash: str | None
     pseudonymous_user_key: str | None = None
+    hash_scheme: str | None = None
 
     def as_dict(self) -> Dict[str, Any]:
         data = {
@@ -130,6 +143,8 @@ class TrustRecord:
         }
         if self.pseudonymous_user_key:
             data["pseudonymous_user_key"] = self.pseudonymous_user_key
+        if self.hash_scheme is not None:
+            data["hash_scheme"] = self.hash_scheme
         return data
 
 
@@ -154,12 +169,21 @@ def _sanitize_nested(value: Any) -> Any:
 
 
 def sanitize_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Allowlisted fields only, without banned keys, free-text ``signal_summary.notes`` or
+    unkeyed hostname/container digests. The input is not modified."""
     filtered = {key: record[key] for key in ALLOWED_FIELDS if key in record}
     for key in list(filtered):
         if _is_banned_key(key, exempt=TOP_LEVEL_EXEMPT_KEYS):
             filtered.pop(key)
     for key, value in list(filtered.items()):
         filtered[key] = _sanitize_nested(value)
+    summary = filtered.get("signal_summary")
+    if isinstance(summary, dict):
+        summary.pop("notes", None)
+    deployment = filtered.get("deployment_context_snapshot")
+    if isinstance(deployment, dict):
+        for key in UNKEYED_HOST_HASH_KEYS:
+            deployment.pop(key, None)
     return filtered
 
 
@@ -250,6 +274,13 @@ def validate_trust_record(record: Dict[str, Any]) -> None:
     if pseudonymous_user_key is not None and not isinstance(pseudonymous_user_key, str):
         raise ValueError("pseudonymous_user_key must be str when provided")
 
+    hash_scheme = record.get("hash_scheme")
+    if hash_scheme is not None:
+        if hash_scheme not in HASH_SCHEMES:
+            raise ValueError(f"hash_scheme must be one of {sorted(HASH_SCHEMES)}")
+        if (hash_scheme == HASH_SCHEME_NONE) != (response_hash is None):
+            raise ValueError("hash_scheme 'none' goes with a null response_hash, and only then")
+
     model_snapshot = record.get("model_config_snapshot")
     if not isinstance(model_snapshot, dict):
         raise ValueError("model_config_snapshot must be a dict")
@@ -273,9 +304,10 @@ def signal_summary_from(
     derived_signals: Any,
     aggregate_score: float | None = None,
 ) -> Dict[str, Any]:
+    """The numeric signal summary of a record. A free-text ``notes`` value in
+    ``derived_signals`` is not copied: records hold no free text."""
     summary: Dict[str, Any] = {}
     components: Dict[str, Any] | None = None
-    notes = None
 
     if hasattr(derived_signals, "as_dict"):
         try:
@@ -289,8 +321,6 @@ def signal_summary_from(
             summary["fatigue_score"] = derived_signals.get("fatigue_score")
         if isinstance(derived_signals.get("components"), dict):
             components = derived_signals.get("components")
-        if isinstance(derived_signals.get("notes"), str):
-            notes = derived_signals.get("notes")
         if components is None and isinstance(derived_signals.get("signal_scores"), dict):
             components = derived_signals.get("signal_scores")
 
@@ -302,8 +332,6 @@ def signal_summary_from(
 
     if components:
         summary["components"] = components
-    if notes:
-        summary["notes"] = notes
     _validate_signal_summary(summary)
     return summary
 

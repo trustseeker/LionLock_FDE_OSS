@@ -17,6 +17,11 @@ from lionlock.utils.chain_verifier import (
     verify_chain_file,
 )
 from lionlock.utils.jcs import canonical_bytes
+from lionlock.utils.private_files import (
+    PRIVATE_FILE_MODE,
+    ensure_private_dir,
+    open_private_append,
+)
 
 try:  # POSIX: an advisory lock shared by every process appending to the same file.
     import fcntl
@@ -64,7 +69,8 @@ class TrustVaultLogger:
     starting a new chain.
 
     Entries are written in format 2: strict canonical JSON (``docs/AUDIT_LOGGING.md``), hashed and
-    written in the same encoding.
+    written in the same encoding. A new log file is created owner-only (0600), and new parent
+    directories 0700; an existing file keeps its mode.
     """
 
     def __init__(self, path: str | Path = "trustvault.log") -> None:
@@ -104,8 +110,8 @@ class TrustVaultLogger:
         """
         # Checked before any file or directory is touched, so a refused call changes nothing.
         canonical_bytes({"event": event, "payload": payload})
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a+b") as handle, _locked(handle):
+        ensure_private_dir(self.path.parent)
+        with open_private_append(self.path, binary=True, readable=True) as handle, _locked(handle):
             entry = {
                 "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "event": event,
@@ -146,8 +152,8 @@ class TrustVaultLogger:
 
     def flush(self) -> None:
         """Synchronous logger; nothing buffered, but ensure file exists for readers."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.touch(exist_ok=True)
+        ensure_private_dir(self.path.parent)
+        self.path.touch(mode=PRIVATE_FILE_MODE, exist_ok=True)
 
     def close(self) -> None:
         """Idempotent close for API symmetry; delegates to flush."""

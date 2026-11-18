@@ -24,7 +24,10 @@ still in it.
 
 `record()` refuses a payload that has no canonical form (see below) with a `ValueError` that names
 the offending path, for example `payload.turn_scores: key 9 (int) is not text`. It checks before
-touching the disk, so a refused call creates and changes nothing.
+touching the disk, so a refused call creates and changes nothing. A new log file is created
+owner-only (mode 0600) by the call that creates it, and missing parent directories 0700, whatever
+the umask. An existing file or directory keeps its mode; LionLock never changes it, so tighten an
+older log yourself if it is readable by others (`chmod 600 trustvault.log`).
 
 ## TrustVaultLogger entry format
 
@@ -130,6 +133,16 @@ end, or a history rewritten with fresh hashes, needs a head recorded where the l
 change it: `lionlock-telemetry head`, later `verify --expected-head`. JSONL and SQL backends
 remain available. This stream is privacy-focused and operational; `TrustVaultLogger` remains the
 canonical audit chain.
+
+New JSONL files written by the event log (`logging.path`) and by the Trust Overlay
+(`logs/trust_overlay/*.jsonl`, including annotations) are created owner-only (0600), and missing
+directories 0700, by the call that creates them. Existing files and directories keep their modes.
+Trust Overlay records no longer hold guessable digests or free text: `response_hash` is an
+HMAC-SHA256 of the reply under a key derived from the configured salt (`TRUST_OVERLAY_SALT` or
+`[trust_overlay] salt`), or null when no salt is set; the hostname and container digests are gone;
+and `signal_summary.notes` is dropped. Each new record says which rules it was written under in
+`hash_scheme` (`keyed-v1`, `caller` for a hash the caller passed in, or `none`); records without
+it predate the change and may hold unkeyed SHA-256 digests. Existing files are not rewritten.
 
 ## SQL sink delivery guarantees
 
