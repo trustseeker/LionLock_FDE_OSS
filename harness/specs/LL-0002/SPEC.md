@@ -1,7 +1,7 @@
 +++
 id = "LL-0002"
 title = "Attribute every gate decision to its weighted evidence, and let policy change the action, never the severity (decision D1)"
-status = "open"
+status = "done"
 tier = "public"
 allowed_paths = [
   "src/lionlock/core/gating.py",
