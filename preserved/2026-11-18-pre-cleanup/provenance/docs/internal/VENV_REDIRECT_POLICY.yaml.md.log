@@ -1,0 +1,5 @@
+commit	author_date	subject
+bd8c7533776a8f5a4d145cd239ff62fba9745b8c	2026-10-18T17:00:51+11:00	docs: review follow-ups from #21 (README example, logging claim, venv path) (#22)
+2f08be386a4cc50113897ea68d12ccf04adbca56	2026-10-18T00:08:11+11:00	docs: contributor hygiene and an accurate README (#21)
+041dc15ec3dca39d437575f825a9de4f134f64d8	2026-03-02T11:31:45+11:00	chore: repo hygiene (move internal artifacts)
+0da4eecc40e18e10767de5d642f45345ffd4a301	2025-12-30T22:48:04+11:00	security(module4): fail-closed token auth + identifier hardening

@@ -1,0 +1,9 @@
+commit	author_date	subject
+08969a64679a96b362b208e7692fdbfc2e88d430	2026-11-16T13:47:26+11:00	fix(release): point package metadata, docs and site at the current GitHub owner (#45)
+77883887f1efd5fa29171c593370620616ab560a	2026-10-31T20:14:48-07:00	Audit follow-ups from #44's review (logger whitespace, head() lock, cache key, rate pruning, .env docs) (#46)
+dbd1b52f7142950801fb7eb1bd582c88c8dc3456	2026-10-31T03:03:15-07:00	Audit fixes: API-key leak, .env gating switch, audit-log integrity, and seven more (#44)
+a107270af1f6464ce596c11e7d3514a56489744a	2026-10-28T19:39:04+11:00	docs: make b2 installation instructions match PyPI availability (#41)
+05434565c96a9534494110cf048caad804dc343d	2026-10-23T16:25:31+11:00	docs: describe what 1.0.0b2 actually contains, and align the site (#35)
+3bf93a4f262d7229ca4554901c593c90126cd1aa	2026-10-22T20:21:45+11:00	site: state the C-extension gap as open instead of covered (#31)
+356c3e8004a02ace6c243ae8e7f92054d2b80791	2026-10-22T20:05:42+11:00	site: correct the no-network claim to match how it is actually proved (#29)
+9a4a01ab24a44d813ff99edf8edfc9022a63e5de	2026-10-22T19:38:49+11:00	site: add the project page and its Pages deployment workflow (#26)

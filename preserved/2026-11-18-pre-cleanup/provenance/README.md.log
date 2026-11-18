@@ -1,0 +1,19 @@
+commit	author_date	subject
+b93ac367d3f5c5d662b49ddb4b2ea0ee8e01afa6	2026-11-16T19:27:25+11:00	docs: add a name and logo policy (TRADEMARK.md) (#53)
+08969a64679a96b362b208e7692fdbfc2e88d430	2026-11-16T13:47:26+11:00	fix(release): point package metadata, docs and site at the current GitHub owner (#45)
+273fc44c3a99978ee835891e29e41db63eafde1b	2026-11-11T16:32:46-08:00	fix(receiver): read the rate-limit hour under the lock; pin the test clock (#48)
+77883887f1efd5fa29171c593370620616ab560a	2026-10-31T20:14:48-07:00	Audit follow-ups from #44's review (logger whitespace, head() lock, cache key, rate pruning, .env docs) (#46)
+73ecb340e7c6d2c935e9ea7af7e7e20cf02f9b46	2026-10-31T02:23:58-07:00	Dubzees claude/project hygiene (#42)
+a107270af1f6464ce596c11e7d3514a56489744a	2026-10-28T19:39:04+11:00	docs: make b2 installation instructions match PyPI availability (#41)
+aac9740e91b51ccb73e05f697d1ff5da6d05e975	2026-10-22T19:29:46+11:00	release: 1.0.0b2 with the security fixes, published without a token (#28)
+bd8c7533776a8f5a4d145cd239ff62fba9745b8c	2026-10-18T17:00:51+11:00	docs: review follow-ups from #21 (README example, logging claim, venv path) (#22)
+2f08be386a4cc50113897ea68d12ccf04adbca56	2026-10-18T00:08:11+11:00	docs: contributor hygiene and an accurate README (#21)
+d59cc3962b9737735d21ef0ed96d992600d95c6e	2026-10-15T09:28:58+11:00	LionLock 1.0.0b1 (first public beta) with BigQuery sync (#16)
+6671af3d454952dc53786dcaa04431279d495b46	2026-10-12T16:14:16+11:00	SQLite telemetry log with opt-in uploads; fix low_conf_halluc and fatigue gating (#13)
+041dc15ec3dca39d437575f825a9de4f134f64d8	2026-03-02T11:31:45+11:00	chore: repo hygiene (move internal artifacts)
+014ff90bd4f44a70fcc7356dfc86ed5ae0ea4953	2026-03-02T10:41:44+11:00	docs: quickstart + fixtures
+427cdc2ebb8e35427a70412410a027000f8d5f68	2026-01-05T04:55:44+11:00	Update README for Pre-Beta Public Release
+6e526abf66c5c84c6c96dde069d2cd9074e8128f	2026-01-04T17:23:33+11:00	Add Module 06 replay, Module 07 sim, and README update
+d2f064fe344d883403928f834aa5149efe2c3636	2025-12-31T21:38:34+11:00	Module 05: deterministic gating + canonical SQL logging
+6beb2c3338c57b327f618f1473c6c9251e1c3aff	2025-12-30T22:48:19+11:00	docs(readme): update OSS status and module progress
+6c0692e34dae6d9bdb8f0729696b9418dbc4673f	2025-12-25T11:39:18+11:00	Initial OSS release: Trust Overlay module
