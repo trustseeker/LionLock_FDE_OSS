@@ -101,6 +101,9 @@ def resolve_policy(
     base_subset = _policy_subset(base_config)
     entry_subset = _policy_subset(entry)
     resolved = _merge_dict(base_subset, entry_subset)
+    lionlock_config.validate_policy_config(
+        resolved, source=f"policy {policy_version!r} in {registry_path or 'policies.toml'}"
+    )
 
     config_hash = config_hash_from(resolved)
     return PolicyBundle(
