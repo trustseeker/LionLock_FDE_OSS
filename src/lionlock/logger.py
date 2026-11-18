@@ -9,11 +9,14 @@ from pathlib import Path
 from typing import IO, Any, Dict, Iterator
 
 from lionlock.utils.chain_verifier import (
+    CURRENT_FORMAT,
+    FORMAT_KEY,
     GENESIS_HASH,
     TamperDetectedError,
-    entry_hash,
+    format_2_hash,
     verify_chain_file,
 )
+from lionlock.utils.jcs import canonical_bytes
 
 try:  # POSIX: an advisory lock shared by every process appending to the same file.
     import fcntl
@@ -59,6 +62,9 @@ class TrustVaultLogger:
     Appends are serialized across threads, and across processes on POSIX, so the chain head read
     and the append happen atomically. A damaged last line stops further writes instead of silently
     starting a new chain.
+
+    Entries are written in format 2: strict canonical JSON (``docs/AUDIT_LOGGING.md``), hashed and
+    written in the same encoding.
     """
 
     def __init__(self, path: str | Path = "trustvault.log") -> None:
@@ -89,17 +95,27 @@ class TrustVaultLogger:
             return self._head_from(handle)
 
     def record(self, event: str, payload: Dict[str, Any]) -> None:
+        """Append one entry.
+
+        ``event`` and ``payload`` must have a canonical form: text keys only, finite numbers
+        only, integers within +/-(2**53 - 1), and only dicts, lists, tuples, strings, numbers,
+        booleans and None. Otherwise ``ValueError`` (``CanonicalFormError``) names the offending
+        path, and nothing is created or written.
+        """
+        # Checked before any file or directory is touched, so a refused call changes nothing.
+        canonical_bytes({"event": event, "payload": payload})
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a+b") as handle, _locked(handle):
             entry = {
                 "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "event": event,
+                FORMAT_KEY: CURRENT_FORMAT,
                 "payload": payload,
                 "prev_hash": self._head_from(handle),
             }
-            entry["sha256"] = entry_hash(entry)
+            entry["sha256"] = format_2_hash(entry)
             handle.seek(0, os.SEEK_END)
-            handle.write((json.dumps(entry) + "\n").encode("utf-8"))
+            handle.write(canonical_bytes(entry) + b"\n")
             handle.flush()
 
     def head(self) -> tuple[int, str]:
