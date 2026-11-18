@@ -1,0 +1,18 @@
+[
+  {
+    "filename": "lionlock-1.0.0b1-py3-none-any.whl",
+    "sha256": "0c4d1e89279cd2d44d08af01d55c33ea088ac03c72e6c08bd30f1ae0497134ac",
+    "size": 157918,
+    "upload_time_iso_8601": "2026-10-17T00:23:23.329853Z",
+    "yanked": false,
+    "provenance": "not available (HTTP 404 from PyPI integrity API)"
+  },
+  {
+    "filename": "lionlock-1.0.0b1.tar.gz",
+    "sha256": "17a06cb06a22fa2fa049d2e55708b91ece4f610d366da3097ad2835d8250eca5",
+    "size": 196744,
+    "upload_time_iso_8601": "2026-10-17T00:23:31.143212Z",
+    "yanked": false,
+    "provenance": "not available (HTTP 404 from PyPI integrity API)"
+  }
+]

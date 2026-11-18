@@ -1,0 +1,133 @@
+{
+  "created_utc": "2026-11-18T16:20:18Z",
+  "note": "SHA-256 values establish byte integrity only, not authorship or invention dates.",
+  "refs": 10,
+  "source_commit": "b93ac367d3f5c5d662b49ddb4b2ea0ee8e01afa6",
+  "targets": [
+    {
+      "action": "replace (superseded notice; production-approval wording withdrawn)",
+      "bytes": 9498,
+      "commits": 4,
+      "first_commit": "506ccf754f544b545aaf64a0554024dc184d5015",
+      "git_blob": "2debdafae81a2e487bddd89f67758663a70483e9",
+      "last_commit": "dbd1b52f7142950801fb7eb1bd582c88c8dc3456",
+      "path": "AUDIT_REPORT.md",
+      "sha256": "64bc78a99c38a9d92730f6f17f57b3d194442e6f770d43756f990aa982626ee3"
+    },
+    {
+      "action": "remove (scaffolding)",
+      "bytes": 159,
+      "commits": 1,
+      "first_commit": "041dc15ec3dca39d437575f825a9de4f134f64d8",
+      "git_blob": "4cdfd2600f8ab0c58b88ae7f231d0feb978c446b",
+      "last_commit": "041dc15ec3dca39d437575f825a9de4f134f64d8",
+      "path": "docs/internal/README.md",
+      "sha256": "fdcdcce413c4988a4a013872b206e740552ba589c9406821822549a1936c03d1"
+    },
+    {
+      "action": "remove (scaffolding log)",
+      "bytes": 648,
+      "commits": 2,
+      "first_commit": "cce9aed9e27e7d0da5b858c34f179a95258da468",
+      "git_blob": "5dd5a56b65303c4735f2e7b9c128247844b1fdc2",
+      "last_commit": "041dc15ec3dca39d437575f825a9de4f134f64d8",
+      "path": "docs/internal/new_files_log.txt",
+      "sha256": "217871aea9c8c2a3344bf7c722f4d5c047ba28f1a3dcd7d01eb9f2f128231ea2"
+    },
+    {
+      "action": "remove (stale job card; contradicts current simulator)",
+      "bytes": 3074,
+      "commits": 2,
+      "first_commit": "6e526abf66c5c84c6c96dde069d2cd9074e8128f",
+      "git_blob": "ad94c93dddb3ce733de5b36a37591a8dea3c5757",
+      "last_commit": "041dc15ec3dca39d437575f825a9de4f134f64d8",
+      "path": "docs/internal/module07_jobcard.json",
+      "sha256": "0db588f8f29bfde8f534e61b8fff2cd1b61628d85e69c62e1de3510e7e0aac6f"
+    },
+    {
+      "action": "relocate to docs/VENV_REDIRECT_POLICY.yaml.md (live contributor guidance)",
+      "bytes": 2604,
+      "commits": 4,
+      "first_commit": "0da4eecc40e18e10767de5d642f45345ffd4a301",
+      "git_blob": "9ab2135841840a99bfcfb369f435f87fe4f604dd",
+      "last_commit": "bd8c7533776a8f5a4d145cd239ff62fba9745b8c",
+      "path": "docs/internal/VENV_REDIRECT_POLICY.yaml.md",
+      "sha256": "a567aea42949497989b370291b34949e821bf3dada3f17036fd14083db2b350a"
+    },
+    {
+      "action": "remove (empty)",
+      "bytes": 0,
+      "commits": 1,
+      "first_commit": "cce9aed9e27e7d0da5b858c34f179a95258da468",
+      "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "last_commit": "cce9aed9e27e7d0da5b858c34f179a95258da468",
+      "path": "docs/module06_artifacts_candidates.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "action": "remove (stale hash list of repo files)",
+      "bytes": 4221,
+      "commits": 2,
+      "first_commit": "6e526abf66c5c84c6c96dde069d2cd9074e8128f",
+      "git_blob": "6b1a81dc4f5b5b4e354ccd421ce70112b1f8cc35",
+      "last_commit": "041dc15ec3dca39d437575f825a9de4f134f64d8",
+      "path": "docs/module06_artifacts_manifest.json",
+      "sha256": "ea83b6847167a25030507009fa623bd98f27a55b7dd6cfc81ec54372ddeecff3"
+    },
+    {
+      "action": "remove (research handoff; context kept in issue #17)",
+      "bytes": 1984,
+      "commits": 1,
+      "first_commit": "99edf21eeeca196cc6b734823535677ef5fd4c10",
+      "git_blob": "eccf29ae6d5987b3f92ef776c2ac38f96aea9795",
+      "last_commit": "99edf21eeeca196cc6b734823535677ef5fd4c10",
+      "path": "docs/security/npm-trusted-publisher-review.md",
+      "sha256": "e9a06aee3807893e33aa53d5f6d8f5b4496b4bba07d2fcc1a916a9fb3888ac42"
+    },
+    {
+      "action": "edit (contradictory guidance)",
+      "bytes": 4016,
+      "commits": 4,
+      "first_commit": "d2f064fe344d883403928f834aa5149efe2c3636",
+      "git_blob": "ebfd46360d67c9c0877a22a8f740ced59df0c0a3",
+      "last_commit": "2f08be386a4cc50113897ea68d12ccf04adbca56",
+      "path": "docs/SECURITY.md",
+      "sha256": "538ef94e96250da165fdf6e773a14b4a586288692935eda3afdce5676cfcdcd9"
+    },
+    {
+      "action": "edit (stale paths and prototypes)",
+      "bytes": 1858,
+      "commits": 5,
+      "first_commit": "d2f064fe344d883403928f834aa5149efe2c3636",
+      "git_blob": "cf527975682e5c90a94b62788a8beda1c436ecc7",
+      "last_commit": "bd8c7533776a8f5a4d145cd239ff62fba9745b8c",
+      "path": "docs/USAGE.md",
+      "sha256": "cd05f9ca7325577bd513b5ea7a0aacf115c8aa583815f7488b5a3b6d391519c8"
+    },
+    {
+      "action": "edit (English-only scope, fatigue wording, tamper-evidence wording, release)",
+      "bytes": 6702,
+      "commits": 18,
+      "first_commit": "6c0692e34dae6d9bdb8f0729696b9418dbc4673f",
+      "git_blob": "8d443f7a371901b46f711165fce50ebeb3909239",
+      "last_commit": "b93ac367d3f5c5d662b49ddb4b2ea0ee8e01afa6",
+      "path": "README.md",
+      "sha256": "062c7a2166c61d43a99759a0584d93b38bcdc00b481106e5271c0d1211a94895"
+    },
+    {
+      "action": "edit (release and scope wording)",
+      "bytes": 18253,
+      "commits": 8,
+      "first_commit": "9a4a01ab24a44d813ff99edf8edfc9022a63e5de",
+      "git_blob": "7bfdceacf50f8a1ac785744f038d509155e54ae1",
+      "last_commit": "08969a64679a96b362b208e7692fdbfc2e88d430",
+      "path": "site/index.html",
+      "sha256": "2ed9bd1aab27271cf31c06d192ce4b7377ae07a03c7963da9d3e877e54e788de"
+    }
+  ],
+  "tools": {
+    "git": "git version 2.43.0",
+    "python": "3.11.17"
+  },
+  "tracked_files": 196
+}

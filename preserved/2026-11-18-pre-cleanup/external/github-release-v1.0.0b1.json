@@ -1,0 +1,10 @@
+{
+  "source": "GitHub REST (list releases), read 2026-11-18",
+  "tag_name": "v1.0.0b1",
+  "tag_commit": "d59cc3962b9737735d21ef0ed96d992600d95c6e",
+  "name": "LionLock 1.0.0b1 — first public beta",
+  "html_url": "https://github.com/trustseeker/LionLock_FDE_OSS/releases/tag/v1.0.0b1",
+  "published_at": "2026-10-17T01:12:12Z",
+  "prerelease": true,
+  "body": "The first public beta of open-source LionLock. Interfaces may still change before 1.0.0.\n\nInstall: pip install lionlock==1.0.0b1\n\n- Local, hash-chained SQLite telemetry log, with opt-in uploads of allowlisted, pseudonymized fields to a receiver you run (`lionlock-telemetry`).\n- Reference ingest server that validates every upload as untrusted input and stores only rebuilt, validated snapshots.\n- `lionlock-telemetry bigquery-sync`: copies the receiver's warehouse into BigQuery. Each `events` and `trust_records` row is loaded exactly once, and `uploads` is replaced as a snapshot whenever it changes.\n- `low_conf_halluc` no longer flags grounded answers, and the uncalibrated `fatigue_risk_index` no longer gates when its inputs are missing (signal schema `SE-0.4.0`).\n- Receivers admit `1.0.0b1` as a public version label. Upgrade a receiver before its clients, because an older receiver rejects snapshots that carry the new label.\n\nSee CHANGELOG.md for details."
+}
