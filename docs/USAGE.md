@@ -1,12 +1,14 @@
 # Usage
 
 ## Local Development
-- Create an environment outside the repo (see `docs/internal/VENV_REDIRECT_POLICY.yaml.md`):
+- Use one virtual environment: a git-ignored `.venv` in the repository by default, or the path in
+  `LIONLOCK_VENV_PATH` to keep it outside the project tree (see
+  [`VENV_REDIRECT_POLICY.yaml.md`](VENV_REDIRECT_POLICY.yaml.md)). `bash tools/dev_setup.sh` creates
+  it and installs the dev tools. To do it by hand:
   ```bash
-  python -m venv ~/.lionlock_env && source ~/.lionlock_env/bin/activate
+  python -m venv .venv && source .venv/bin/activate
+  pip install -e '.[dev]'
   ```
-  Or use your preferred venv location (e.g., `$HOME/.venv` or `/tmp/lionlock_venv`):
-- Install the package with dev tools: `pip install -e .[dev]`
 
 ## Logging
 ```python
@@ -31,14 +33,15 @@ logger.close()
 - `tools/venv_guard.sh` checks that the venv at `$LIONLOCK_VENV_PATH` (default `<repo>/.venv`) is the active interpreter.
 
 ## Lockdown Workflow
-- Run `./tools/lockdown.sh` to generate a SHA256 manifest and OpenTimestamps proof.
-- Commit the generated manifest and `.ots` proof to track release integrity.
-
-## Archived Assets
-FastAPI, React, and docker-compose prototypes now live in `archive/experimental/`. They are not part of the supported OSS surface but remain available for reference.
+- Run `./tools/lockdown.sh` to write a SHA-256 manifest of the tree, and an OpenTimestamps proof
+  when the `ots` client is installed.
+- The manifest shows whether files changed after it was made; the proof shows the manifest
+  existed by the time it was stamped. Neither shows who wrote the files.
 
 
 ## Audit logging
-- Canonical tamper-evident audit stream: `TrustVaultLogger` (see `docs/AUDIT_LOGGING.md`).
-- Verify chain integrity with `TrustVaultLogger.verify_chain()`.
+- Canonical hash-chained audit stream: `TrustVaultLogger` (see [`AUDIT_LOGGING.md`](AUDIT_LOGGING.md)).
+- Verify chain integrity with `TrustVaultLogger.verify_chain()`. The chain detects edits, removals
+  and reordering inside the log; to detect a rewrite of the whole log, compare its latest head with
+  a copy kept somewhere the log's writer cannot change.
 - Public JSONL/SQL telemetry in `lionlock.logging.event_log` is non-canonical analytics output.
