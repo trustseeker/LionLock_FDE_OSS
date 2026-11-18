@@ -301,6 +301,11 @@ def _json_column(value: Any) -> Any:
         return json.loads(value)
     except ValueError as exc:
         raise SnapshotError("JSON column holds invalid JSON") from exc
+    except (RecursionError, MemoryError) as exc:
+        # Valid JSON can still be nested too deeply, or be too large, to decode here.
+        raise SnapshotError(
+            f"JSON column is nested too deeply or too large to decode ({type(exc).__name__})"
+        ) from exc
 
 
 def _policy_event_row(row: Tuple[Any, ...]) -> Tuple[Any, ...] | None:
@@ -381,6 +386,9 @@ def validate_snapshot(path: Path, *, max_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES
     except (TypeError, ValueError) as exc:
         # e.g. a BLOB planted in a TEXT column cannot be canonicalized.
         raise SnapshotError(f"snapshot holds non-canonical values: {type(exc).__name__}") from exc
+    except (RecursionError, MemoryError) as exc:
+        # Hostile input must end as an ordinary rejection, never as an unhandled error.
+        raise SnapshotError(f"snapshot is too complex to validate: {type(exc).__name__}") from exc
     return SnapshotInfo(meta=meta, rows=rows)
 
 

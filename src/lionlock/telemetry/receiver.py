@@ -15,15 +15,22 @@ before the upload is recorded, as ``accepted/<stored_sha256>.db``. Uploaded byte
 whether the upload is accepted or rejected; a rejection keeps only its reason. Uploads are
 idempotent per (install, segment) by ``content_digest``, a duplicate is confirmed only while its
 accepted file is intact, and client IP addresses are never logged or stored.
+
+With tokens, each install is bound to the token that first uploaded a segment for it, and other
+tokens are refused for that install. Every request must arrive in full within a total deadline,
+and the server handles a bounded number of connections at once. New files and directories are
+created owner-only.
 """
 
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import os
 import re
+import socket
 import sqlite3
 import sys
 import threading
@@ -35,7 +42,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterator, Mapping, Tuple
+from typing import Any, Callable, Dict, Iterator, Mapping, Tuple
 
 from lionlock.logging.token_auth import hash_token
 
@@ -57,15 +64,28 @@ DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
 DEFAULT_UPLOADS_PER_HOUR = 120
 _RATE_KEYS_MAX = 100_000
 DEFAULT_MAX_CONCURRENT_UPLOADS = 4
+# A request (request line, headers and body) must arrive in full within this many seconds. A
+# full 20,000-row snapshot is a few hundred KB of gzip, so this leaves ample room for slow links.
+DEFAULT_REQUEST_DEADLINE_S = 60.0
+# Connections handled at once; more are answered 503 straight away, without starting a thread.
+DEFAULT_MAX_CONNECTIONS = 32
+# Idle limit for any single read or write on a connection.
+_SOCKET_TIMEOUT_S = 30.0
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
+_PRIVATE_DIR_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
+
 # v2: uploads are keyed by (install_id, segment_index) and record the SHA-256 of the received
 # file and of the rebuilt file kept in accepted/ separately. Older warehouses are refused.
+# install_owners, which binds each install to the token that first uploaded for it, was added to
+# v2 later: a v2 warehouse that predates it is upgraded in place by adding that one table, and
+# no existing row, table or index changes.
 WAREHOUSE_SCHEMA_VERSION = 2
 
-WAREHOUSE_DDL: Tuple[str, ...] = (
+_WAREHOUSE_V2_BASE_DDL: Tuple[str, ...] = (
     "CREATE TABLE IF NOT EXISTS uploads ("
     "install_id TEXT NOT NULL, "
     "segment_index INTEGER NOT NULL, "
@@ -115,6 +135,18 @@ WAREHOUSE_DDL: Tuple[str, ...] = (
     "PRIMARY KEY (install_id, seq))",
 )
 
+# token_sha256 is the allowlist entry (SHA-256 of the bearer token), never the token itself.
+_INSTALL_OWNERS_DDL = (
+    "CREATE TABLE IF NOT EXISTS install_owners ("
+    "install_id TEXT PRIMARY KEY NOT NULL, "
+    "token_sha256 TEXT NOT NULL, "
+    "bound_hour TEXT NOT NULL)"
+)
+
+WAREHOUSE_DDL: Tuple[str, ...] = (*_WAREHOUSE_V2_BASE_DDL, _INSTALL_OWNERS_DDL)
+
+_UPGRADABLE = "upgradable"
+
 
 @dataclass(frozen=True)
 class ReceiverConfig:
@@ -125,6 +157,8 @@ class ReceiverConfig:
     max_snapshot_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES
     uploads_per_hour: int = DEFAULT_UPLOADS_PER_HOUR
     max_concurrent_uploads: int = DEFAULT_MAX_CONCURRENT_UPLOADS
+    request_deadline_s: float = DEFAULT_REQUEST_DEADLINE_S
+    max_connections: int = DEFAULT_MAX_CONNECTIONS
 
 
 @dataclass(frozen=True)
@@ -199,28 +233,28 @@ def _schema_signature(conn: sqlite3.Connection) -> Tuple[Any, ...]:
     return tuple(entries), columns, indexes
 
 
-_EXPECTED_SIGNATURE: Tuple[Any, ...] | None = None
+_SIGNATURES: Dict[Tuple[str, ...], Tuple[Any, ...]] = {}
 
 
-def _expected_signature() -> Tuple[Any, ...]:
-    global _EXPECTED_SIGNATURE
-    if _EXPECTED_SIGNATURE is None:
+def _reference_signature(ddl: Tuple[str, ...]) -> Tuple[Any, ...]:
+    if ddl not in _SIGNATURES:
         reference = sqlite3.connect(":memory:")
         try:
-            for ddl in WAREHOUSE_DDL:
-                reference.execute(ddl)
-            _EXPECTED_SIGNATURE = _schema_signature(reference)
+            for statement in ddl:
+                reference.execute(statement)
+            _SIGNATURES[ddl] = _schema_signature(reference)
         finally:
             reference.close()
-    return _EXPECTED_SIGNATURE
+    return _SIGNATURES[ddl]
 
 
-def _warehouse_state(conn: sqlite3.Connection) -> str:
-    """``empty``, ``current`` or a short reason the warehouse cannot be used.
+def _warehouse_layout(conn: sqlite3.Connection) -> str:
+    """``empty``, ``current``, ``upgradable`` or a short reason the warehouse cannot be used.
 
     Empty means no schema objects of its own, ``user_version`` 0 and ``application_id`` 0;
     tables with zero rows are not empty. Current means ``user_version`` 2 and a schema that
-    matches ``WAREHOUSE_DDL`` exactly, including columns, keys and indexes.
+    matches ``WAREHOUSE_DDL`` exactly, including columns, keys and indexes. Upgradable means
+    ``user_version`` 2 and an exact match for the v2 layout from before ``install_owners``.
     """
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
     app_id = int(conn.execute("PRAGMA application_id").fetchone()[0])
@@ -233,9 +267,23 @@ def _warehouse_state(conn: sqlite3.Connection) -> str:
         return f"it has application_id {app_id}"
     if version != WAREHOUSE_SCHEMA_VERSION:
         return f"it uses warehouse layout v{version or 1}"
-    if _schema_signature(conn) != _expected_signature():
-        return f"its v{version} schema does not match this receiver's"
-    return "current"
+    signature = _schema_signature(conn)
+    if signature == _reference_signature(WAREHOUSE_DDL):
+        return "current"
+    if signature == _reference_signature(_WAREHOUSE_V2_BASE_DDL):
+        return _UPGRADABLE
+    return f"its v{version} schema does not match this receiver's"
+
+
+def _warehouse_state(conn: sqlite3.Connection) -> str:
+    """``empty``, ``current`` or a short reason the warehouse cannot be read.
+
+    For readers of ``uploads``, ``events`` and ``trust_records`` (bigquery-sync): those tables
+    are identical with and without ``install_owners``, so a warehouse the receiver has not
+    upgraded yet still counts as current here. ``install_owners`` is never read by them.
+    """
+    layout = _warehouse_layout(conn)
+    return "current" if layout == _UPGRADABLE else layout
 
 
 def _refuse(path: Path, reason: str) -> WarehouseVersionError:
@@ -246,41 +294,60 @@ def _refuse(path: Path, reason: str) -> WarehouseVersionError:
     )
 
 
-def init_warehouse(path: Path) -> None:
-    """Create the warehouse, or confirm an existing one already uses this exact layout.
+def _create_private_file(path: Path) -> None:
+    """Create ``path`` empty and owner-only, unless it exists (its mode is then left alone)."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_BINARY, _PRIVATE_FILE_MODE)
+    except FileExistsError:
+        return
+    os.close(fd)
 
-    An existing file is inspected read-only before anything is created or written. Anything
-    other than an empty database or the current layout is refused unchanged: no migration,
-    reset or overwrite.
+
+def init_warehouse(path: Path) -> None:
+    """Create the warehouse, upgrade one from before ``install_owners``, or confirm it.
+
+    An existing file is inspected read-only before anything is created or written. A v2
+    warehouse that predates ``install_owners`` is upgraded in place by adding that empty table,
+    in one transaction; no existing row, table, index or version field is touched. Anything
+    other than an empty database, that layout or the current layout is refused unchanged: no
+    reset or overwrite. A new warehouse and data directory are created owner-only.
     """
     if path.exists() and path.stat().st_size > 0:
         try:
             conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
             try:
-                state = _warehouse_state(conn)
+                state = _warehouse_layout(conn)
             finally:
                 conn.close()
         except sqlite3.DatabaseError as exc:
             raise _refuse(path, "it is not a readable SQLite database") from exc
         if state == "current":
             return
-        if state != "empty":
+        if state not in ("empty", _UPGRADABLE):
             raise _refuse(path, state)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=_PRIVATE_DIR_MODE, parents=True, exist_ok=True)
+    # SQLite would create the file world-readable; create it owner-only first. Its journal
+    # files take the database file's mode.
+    _create_private_file(path)
     conn = sqlite3.connect(str(path), isolation_level=None)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        state = _warehouse_state(conn)  # re-checked under the write lock
-        if state != "empty":
+        state = _warehouse_layout(conn)  # re-checked under the write lock
+        if state == "empty":
+            for ddl in WAREHOUSE_DDL:
+                conn.execute(ddl)
+            conn.execute(f"PRAGMA user_version={WAREHOUSE_SCHEMA_VERSION}")
+        elif state == _UPGRADABLE:
+            conn.execute(_INSTALL_OWNERS_DDL)
+        else:
             conn.execute("ROLLBACK")
             if state == "current":
                 return
             raise _refuse(path, state)
-        for ddl in WAREHOUSE_DDL:
-            conn.execute(ddl)
-        conn.execute(f"PRAGMA user_version={WAREHOUSE_SCHEMA_VERSION}")
         conn.execute("COMMIT")
+        if state == _UPGRADABLE:
+            _LOGGER.warning("%s upgraded in place: added the install_owners table", path.name)
     finally:
         conn.close()
 
@@ -311,6 +378,18 @@ def _current_hour() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:00:00Z")
 
 
+def _rate_key(token_sha: str | None, install_id: str) -> str:
+    """Who an upload is counted against.
+
+    With tokens, the SHA-256 of the token that was authorized for this request: a client cannot
+    change it without a new token, so rotating install ids does not reset its budget, and only
+    allowlisted tokens ever become keys. Anonymous uploads can only be counted per install id,
+    which the client chooses, so that limit slows a misbehaving client but cannot stop a
+    deliberate one; docs/TELEMETRY.md says to require tokens on any public endpoint.
+    """
+    return "token:" + token_sha if token_sha is not None else "install:" + install_id
+
+
 class Receiver:
     """Validation and storage for uploaded snapshots, independent of the HTTP layer."""
 
@@ -322,20 +401,54 @@ class Receiver:
         self.warehouse_path = config.data_dir / "warehouse.db"
         init_warehouse(self.warehouse_path)
         for directory in (self.quarantine_dir, self.accepted_dir, self.rejected_dir):
-            directory.mkdir(parents=True, exist_ok=True)
+            directory.mkdir(mode=_PRIVATE_DIR_MODE, parents=True, exist_ok=True)
+        self._report_shared_modes()
         self._ingest_lock = threading.Lock()
         self._rate_lock = threading.Lock()
         self._rate: Dict[str, Tuple[int, int]] = {}
         self._rate_pruned_hour = -1
         self._slots = threading.BoundedSemaphore(max(1, config.max_concurrent_uploads))
+        # Measures each request's deadline; replaceable so tests need not sleep.
+        self.clock: Callable[[], float] = time.monotonic
+
+    def _report_shared_modes(self) -> None:
+        """Warn about existing receiver paths that group or others can access.
+
+        New paths are created owner-only, but existing modes are an operator's choice and are
+        never changed here; this only reports them.
+        """
+        if os.name != "posix":
+            return
+        for path, label in (
+            (self.config.data_dir, "data directory"),
+            (self.warehouse_path, "warehouse.db"),
+            (self.quarantine_dir, "quarantine/"),
+            (self.accepted_dir, "accepted/"),
+            (self.rejected_dir, "rejected/"),
+        ):
+            mode = path.stat().st_mode & 0o777
+            if mode & 0o077:
+                _LOGGER.warning(
+                    "%s is accessible to group or others (mode %04o); new receiver files are "
+                    "created owner-only, but existing modes are left unchanged",
+                    label,
+                    mode,
+                )
+
+    def _token_sha256(self, header: str | None) -> str | None:
+        """The allowlisted SHA-256 of the bearer token in ``header``, or None."""
+        if not header or not header.startswith("Bearer "):
+            return None
+        token = header[len("Bearer ") :].strip()
+        if not token:
+            return None
+        digest = hash_token(token)
+        return digest if digest in self.config.token_hashes else None
 
     def authorize(self, header: str | None) -> bool:
         if not self.config.token_hashes:
             return True
-        if not header or not header.startswith("Bearer "):
-            return False
-        token = header[len("Bearer ") :].strip()
-        return bool(token) and hash_token(token) in self.config.token_hashes
+        return self._token_sha256(header) is not None
 
     @contextmanager
     def upload_slot(self) -> Iterator[bool]:
@@ -348,6 +461,17 @@ class Receiver:
                 self._slots.release()
 
     def handle_upload(self, headers: Mapping[str, str], body: bytes) -> IngestResult:
+        # The single Authorization value is both what is authorized and what the upload is
+        # counted and bound against. More than one is refused: with two, one could be checked
+        # and the other counted.
+        authorization = [value for key, value in headers.items() if key.lower() == "authorization"]
+        if len(authorization) > 1:
+            return _error(400, "more than one Authorization header")
+        token_sha: str | None = None
+        if self.config.token_hashes:
+            token_sha = self._token_sha256(authorization[0] if authorization else None)
+            if token_sha is None:
+                return _error(401, "unauthorized", {"WWW-Authenticate": "Bearer"})
         lowered = {key.lower(): value for key, value in headers.items()}
         if lowered.get("content-type", "").split(";")[0].strip() != CONTENT_TYPE:
             return _error(415, "unsupported content type")
@@ -373,11 +497,16 @@ class Receiver:
             return _error(400, "missing or malformed X-LionLock-Install-Id")
         # Counted before the duplicate shortcut: resending identical bytes still costs a gunzip,
         # a hash and a re-read of the stored file, so it must not be free.
-        if not self._within_rate(self._rate_key(lowered, install_id)):
+        if not self._within_rate(_rate_key(token_sha, install_id)):
             return _error(429, "upload rate limit exceeded", {"Retry-After": "3600"})
-        recorded = self._stored_sha_for(received_sha)
+        if token_sha is not None and self._bound_elsewhere(install_id, token_sha):
+            return self._foreign_install()
+        recorded = self._recorded_upload_for(received_sha)
         if recorded is not None:
-            if not self._evidence_intact(recorded):
+            stored, recorded_install = recorded
+            if token_sha is not None and self._bound_elsewhere(recorded_install, token_sha):
+                return self._foreign_install()
+            if not self._evidence_intact(stored):
                 return self._evidence_failure()
             return IngestResult(200, {"status": "duplicate", "file_sha256": received_sha})
 
@@ -390,12 +519,14 @@ class Receiver:
             return _error(422, str(exc))
 
         stored_sha = hashlib.sha256(clean).hexdigest()
-        outcome, recorded = self._ingest(received_sha, stored_sha, clean, info)
+        outcome, recorded_sha = self._ingest(received_sha, stored_sha, clean, info, token_sha)
+        if outcome == "foreign_install":
+            return self._foreign_install()
         if outcome in _CONFLICTS:
             message = _CONFLICTS[outcome]
             self._reject(received_sha, message)
             return _error(409, message)
-        if outcome == "duplicate" and not self._evidence_intact(recorded):
+        if outcome == "duplicate" and not self._evidence_intact(recorded_sha):
             return self._evidence_failure()
         body_out: Dict[str, Any] = {
             "status": outcome,
@@ -416,18 +547,22 @@ class Receiver:
         if declared != (info.install_id, str(info.segment_index), info.content_digest):
             raise SnapshotError("upload headers do not match the snapshot metadata")
 
-    def _rate_key(self, headers: Mapping[str, str], install_id: str) -> str:
-        """Who an upload is counted against.
+    def _bound_elsewhere(self, install_id: str, token_sha: str) -> bool:
+        """Whether ``install_id`` is bound to a token other than ``token_sha``."""
+        conn = sqlite3.connect(str(self.warehouse_path), timeout=30)
+        try:
+            row = conn.execute(
+                "SELECT token_sha256 FROM install_owners WHERE install_id = ?", (install_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        return row is not None and row[0] != token_sha
 
-        With tokens, the token: a client cannot change it without a new token, so rotating install
-        ids does not reset its budget. Anonymous uploads can only be counted per install id, which
-        the client chooses, so that limit slows a misbehaving client but cannot stop a deliberate
-        one; docs/TELEMETRY.md says to require tokens on any public endpoint.
-        """
-        if self.config.token_hashes:
-            header = headers.get("authorization", "")
-            return "token:" + hash_token(header[len("Bearer ") :].strip())
-        return "install:" + install_id
+    @staticmethod
+    def _foreign_install() -> IngestResult:
+        # No rejected/ note: the snapshot was not judged, and its owner may still send it.
+        _LOGGER.warning("refused an upload for an install bound to a different token")
+        return _error(403, "install is bound to a different upload token")
 
     def _within_rate(self, key: str) -> bool:
         if self.config.uploads_per_hour <= 0:
@@ -453,17 +588,17 @@ class Receiver:
             self._rate[key] = (hour, count + 1)
         return True
 
-    def _stored_sha_for(self, received_sha: str) -> str | None:
-        """The stored_sha256 of a committed upload that arrived as exactly these bytes."""
+    def _recorded_upload_for(self, received_sha: str) -> Tuple[str, str] | None:
+        """(stored_sha256, install_id) of a committed upload that arrived as exactly these bytes."""
         conn = sqlite3.connect(str(self.warehouse_path), timeout=30)
         try:
             row = conn.execute(
-                "SELECT stored_sha256 FROM uploads WHERE received_sha256 = ? LIMIT 1",
+                "SELECT stored_sha256, install_id FROM uploads WHERE received_sha256 = ? LIMIT 1",
                 (received_sha,),
             ).fetchone()
         finally:
             conn.close()
-        return None if row is None else str(row[0])
+        return None if row is None else (str(row[0]), str(row[1]))
 
     def _evidence_intact(self, stored_sha: str | None) -> bool:
         """Whether the accepted file a committed upload points to exists with its recorded hash."""
@@ -501,12 +636,23 @@ class Receiver:
         _fsync_directory(self.accepted_dir)
 
     def _reject(self, received_sha: str, reason: str) -> None:
-        """Record why an upload was refused. The uploaded bytes themselves are not kept."""
+        """Record why an upload was refused. The uploaded bytes themselves are not kept.
+
+        A new note is created owner-only; an existing one is overwritten with its mode unchanged.
+        """
         note = self.rejected_dir / f"{received_sha}.reason.txt"
-        note.write_text(reason + "\n", encoding="utf-8")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_BINARY
+        fd = os.open(note, flags, _PRIVATE_FILE_MODE)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write((reason + "\n").encode("utf-8"))
 
     def _ingest(
-        self, received_sha: str, stored_sha: str, clean: bytes, info: SnapshotInfo
+        self,
+        received_sha: str,
+        stored_sha: str,
+        clean: bytes,
+        info: SnapshotInfo,
+        token_sha: str | None = None,
     ) -> Tuple[str, str | None]:
         """Merge a validated segment once; returns (outcome, recorded stored_sha256).
 
@@ -514,12 +660,25 @@ class Receiver:
         bytewise-different file is a duplicate, not a conflict. Rows that reuse sequence numbers
         already stored for the install are a conflict too. The accepted file is written durably
         before the upload is committed.
+
+        With a token, an install bound to another token is refused (``foreign_install``) before
+        anything else is decided, and an unbound install is bound to this token in the same
+        transaction that records its first new segment. Anonymous uploads neither bind nor check.
         """
         meta = info.meta
         with self._ingest_lock:
             conn = sqlite3.connect(str(self.warehouse_path), timeout=30, isolation_level=None)
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                owner = None
+                if token_sha is not None:
+                    owner = conn.execute(
+                        "SELECT token_sha256 FROM install_owners WHERE install_id = ?",
+                        (info.install_id,),
+                    ).fetchone()
+                    if owner is not None and owner[0] != token_sha:
+                        conn.execute("ROLLBACK")
+                        return "foreign_install", None
                 existing = conn.execute(
                     "SELECT content_digest, stored_sha256 FROM uploads "
                     "WHERE install_id = ? AND segment_index = ?",
@@ -565,6 +724,12 @@ class Receiver:
                         [(info.install_id, *row) for row in info.rows[table]],
                     )
                 self._relink_successor(conn, info)
+                if token_sha is not None and owner is None:
+                    conn.execute(
+                        "INSERT INTO install_owners (install_id, token_sha256, bound_hour) "
+                        "VALUES (?, ?, ?)",
+                        (info.install_id, token_sha, _current_hour()),
+                    )
                 conn.execute("COMMIT")
                 return "created", stored_sha
             except BaseException:
@@ -620,14 +785,57 @@ class Receiver:
         return "ok" if row[0] == prev_digest else "broken"
 
 
+class _DeadlineReader(io.RawIOBase):
+    """Reads a request socket, giving up once the request's total deadline has passed.
+
+    A per-read timeout alone lets a client that sends one byte at a time hold a connection, and
+    an upload slot, indefinitely. Every read here waits at most the idle timeout and never past
+    the deadline, which is fixed when the connection is accepted.
+    """
+
+    def __init__(
+        self, sock: socket.socket, deadline: float, idle_s: float, clock: Callable[[], float]
+    ) -> None:
+        super().__init__()
+        self._sock = sock
+        self._deadline = deadline
+        self._idle_s = idle_s
+        self._clock = clock
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        remaining = self._deadline - self._clock()
+        if remaining <= 0:
+            raise TimeoutError("request deadline exceeded")
+        self._sock.settimeout(min(self._idle_s, remaining))
+        return self._sock.recv_into(buffer)
+
+
+# The standard library's log_message escapes these; an override must do the same, or a request
+# line could write terminal escape sequences or forged lines into the log.
+_LOG_ESCAPES = str.maketrans({c: f"\\x{c:02x}" for c in (*range(0x20), *range(0x7F, 0xA0))})
+_LOG_ESCAPES[ord("\\")] = "\\\\"
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "lionlock-receiver"
     sys_version = ""
-    timeout = 30
+    timeout = _SOCKET_TIMEOUT_S
+
+    def setup(self) -> None:
+        super().setup()
+        receiver: Receiver = self.server.receiver  # type: ignore[attr-defined]
+        deadline = receiver.clock() + receiver.config.request_deadline_s
+        self.rfile.close()  # releases only the stdlib's reader; the socket stays open
+        self.rfile = io.BufferedReader(
+            _DeadlineReader(self.connection, deadline, _SOCKET_TIMEOUT_S, receiver.clock)
+        )
 
     def log_message(self, format: str, *args: Any) -> None:
         # Deliberately omits the client address: the receiver never records IP addresses.
-        _LOGGER.info(format, *args)
+        _LOGGER.info("%s", (format % args).translate(_LOG_ESCAPES))
 
     def do_GET(self) -> None:
         if self.path == "/healthz":
@@ -640,7 +848,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path != UPLOAD_PATH:
             self._reply(404, {"status": "error", "error": "not found"})
             return
-        if not receiver.authorize(self.headers.get("Authorization")):
+        authorization = self.headers.get_all("Authorization") or []
+        if len(authorization) > 1:
+            self._reply(400, {"status": "error", "error": "more than one Authorization header"})
+            return
+        if not receiver.authorize(authorization[0] if authorization else None):
             self._reply(
                 401, {"status": "error", "error": "unauthorized"}, {"WWW-Authenticate": "Bearer"}
             )
@@ -658,11 +870,17 @@ class _Handler(BaseHTTPRequestHandler):
                 result = _error(503, "receiver is busy; retry later", {"Retry-After": "30"})
                 self._reply(result.status, result.body, result.headers)
                 return
-            body = self.rfile.read(length)
+            try:
+                body = self.rfile.read(length)
+            except TimeoutError:
+                self.close_connection = True
+                self._reply(408, {"status": "error", "error": "request did not arrive in time"})
+                return
             if len(body) != length:
                 self._reply(400, {"status": "error", "error": "incomplete body"})
                 return
             try:
+                # Exactly one Authorization header reaches this point, the one just authorized.
                 result = receiver.handle_upload(dict(self.headers.items()), body)
             except Exception:  # noqa: BLE001 - never leak internals to the client
                 _LOGGER.exception("snapshot ingest failed")
@@ -672,6 +890,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _reply(
         self, status: int, payload: Dict[str, Any], headers: Dict[str, str] | None = None
     ) -> None:
+        # A read may have shortened the socket timeout to the deadline's remainder; writing the
+        # reply gets the ordinary idle timeout.
+        self.connection.settimeout(_SOCKET_TIMEOUT_S)
         data = (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -683,12 +904,57 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+_BUSY_BODY = (
+    json.dumps({"error": "receiver is busy; retry later", "status": "error"}, sort_keys=True) + "\n"
+).encode("utf-8")
+_BUSY_RESPONSE = (
+    "HTTP/1.0 503 Service Unavailable\r\n"
+    "Server: lionlock-receiver\r\n"
+    "Content-Type: application/json\r\n"
+    f"Content-Length: {len(_BUSY_BODY)}\r\n"
+    "Cache-Control: no-store\r\n"
+    "Retry-After: 30\r\n"
+    "Connection: close\r\n"
+    "\r\n"
+).encode("ascii") + _BUSY_BODY
+
+
+def _answer_busy(sock: socket.socket) -> None:
+    """Best-effort 503 from the accepting thread: it never waits on the client."""
+    try:
+        sock.setblocking(False)
+        sock.send(_BUSY_RESPONSE)
+        sock.recv(65536)  # take what already arrived, so closing is less likely to reset
+    except OSError:
+        pass
+
+
 class ReceiverServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: Tuple[str, int], receiver: Receiver) -> None:
         super().__init__(address, _Handler)
         self.receiver = receiver
+        self._connections = threading.BoundedSemaphore(max(1, receiver.config.max_connections))
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        """Start a handler thread, unless ``max_connections`` are already being handled."""
+        if not self._connections.acquire(blocking=False):
+            _LOGGER.warning("connection limit reached; answered 503")
+            _answer_busy(request)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._connections.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connections.release()
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         # The stdlib default prints client_address to stderr; the receiver never records it.
