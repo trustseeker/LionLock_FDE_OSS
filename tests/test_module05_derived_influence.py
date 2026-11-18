@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from lionlock.core import evaluate_policy
 from lionlock.core.models import DerivedSignals, SignalBundle, SignalScores
 
@@ -80,19 +82,66 @@ def test_tie_break_deterministic_for_raw_signals() -> None:
         low_conf_halluc=0.1,
         congestion=0.1,
     )
+    # LL-0002 (D1): the raw-channel trigger is the signal with the largest weighted contribution,
+    # so equal scores go to the heaviest default weight (repetition, 0.30). hallucination_risk has
+    # weight 0 by default and can no longer be named for a decision it did not drive.
     decision = evaluate_policy(bundle)
-    assert decision.trigger_signal == "hallucination_risk"
+    assert decision.trigger_signal == "repetition_loopiness"
 
 
-def test_risk_score_clamped_and_finite_with_bad_inputs() -> None:
+def test_tie_break_on_equal_contributions_follows_trigger_order() -> None:
     bundle = _bundle(
-        repetition=math.nan,
-        novelty=math.inf,
+        repetition=0.4,
+        novelty=0.4,
+        coherence=0.4,
+        context=0.4,
+        hallucination=0.4,
+        fatigue=0.1,
+        low_conf_halluc=0.1,
+        congestion=0.1,
+    )
+    equal = dict.fromkeys(
+        (
+            "repetition_loopiness",
+            "novelty_entropy_proxy",
+            "coherence_structure",
+            "context_adherence",
+            "hallucination_risk",
+        ),
+        0.2,
+    )
+    # Every contribution is 0.08; the tie goes to the first raw signal in TRIGGER_SIGNAL_ORDER.
+    # hallucination_risk is enabled with a positive weight here, so it is eligible and wins.
+    decision = evaluate_policy(bundle, weights=equal)
+    assert decision.trigger_signal == "hallucination_risk"
+    # With its weight at 0 it is not eligible, and the tie goes to the next signal in the order.
+    decision = evaluate_policy(bundle, weights={**equal, "hallucination_risk": 0.0})
+    assert decision.trigger_signal == "context_adherence"
+
+
+def test_non_finite_evidence_is_refused_naming_the_field() -> None:
+    # Review A1: a nan or infinite score used to be read as 0.0, which could lower the risk and
+    # turn broken evidence into ALLOW. It is now refused, and the error names the field.
+    cases = {
+        "repetition_loopiness": _bundle(repetition=math.nan),
+        "novelty_entropy_proxy": _bundle(novelty=math.inf),
+        "fatigue_risk_index": _bundle(fatigue=-math.inf),
+        "low_conf_halluc": _bundle(low_conf_halluc=math.nan),
+    }
+    for field, bundle in cases.items():
+        with pytest.raises(ValueError, match=field):
+            evaluate_policy(bundle)
+
+
+def test_risk_score_clamped_with_finite_out_of_range_inputs() -> None:
+    bundle = _bundle(
+        repetition=1.7,
+        novelty=-3.0,
         coherence=-1.0,
         context=0.2,
         hallucination=0.1,
-        fatigue=math.inf,
-        low_conf_halluc=math.nan,
+        fatigue=2.0,
+        low_conf_halluc=-0.4,
         congestion=-0.5,
     )
     decision = evaluate_policy(bundle)
