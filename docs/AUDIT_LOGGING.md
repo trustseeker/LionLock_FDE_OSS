@@ -125,8 +125,10 @@ legacy log can continue in format 2.
 `src/lionlock/logging/event_log.py` writes sanitized public telemetry events for analysis. By
 default they go to the local SQLite log `logs/lionlock.db`, which also holds Trust Overlay
 records. Each table in that file is a per-table SHA-256 hash chain, checked with
-`lionlock-telemetry verify` (see [TELEMETRY.md](TELEMETRY.md)). JSONL and SQL backends remain
-available. This stream is privacy-focused and operational; `TrustVaultLogger` remains the
+`lionlock-telemetry verify` (see [TELEMETRY.md](TELEMETRY.md)). Detecting rows removed from the
+end, or a history rewritten with fresh hashes, needs a head recorded where the log's writer cannot
+change it: `lionlock-telemetry head`, later `verify --expected-head`. JSONL and SQL backends
+remain available. This stream is privacy-focused and operational; `TrustVaultLogger` remains the
 canonical audit chain.
 
 ## SQL sink delivery guarantees

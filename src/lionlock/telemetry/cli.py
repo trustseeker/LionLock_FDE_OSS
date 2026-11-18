@@ -19,7 +19,15 @@ from lionlock.config import load_config
 
 from .export import export_all, export_snapshot, pending_snapshots
 from .snapshot import COLUMNS, SnapshotError, SnapshotInfo, validate_snapshot
-from .store import LogStore, StoreError, open_store, resolve_sqlite_path
+from .store import (
+    LOG_TABLES,
+    LogStore,
+    StoreError,
+    TableHead,
+    as_table_head,
+    open_store,
+    resolve_sqlite_path,
+)
 from .upload import (
     DELIVERED_STATUSES,
     UploadDisabledError,
@@ -63,22 +71,57 @@ def _cmd_status(config: Dict[str, Any], _args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_verify(config: Dict[str, Any], _args: argparse.Namespace) -> int:
+def _head_json(head: TableHead | None) -> Dict[str, Any] | None:
+    return None if head is None else head.as_dict()
+
+
+def _load_expected_head(source: str) -> Dict[str, TableHead]:
+    """Read a head file as printed by ``lionlock-telemetry head`` ("-" reads stdin)."""
+    text = sys.stdin.read() if source == "-" else Path(source).expanduser().read_text("utf-8")
+    data = json.loads(text)
+    if not isinstance(data, dict) or not data:
+        raise ValueError("expected a JSON object mapping table names to heads")
+    unknown = sorted(set(data) - set(LOG_TABLES))
+    if unknown:
+        raise ValueError(f"unknown table(s): {', '.join(unknown)}")
+    return {table: as_table_head(value) for table, value in data.items()}
+
+
+def _cmd_head(config: Dict[str, Any], _args: argparse.Namespace) -> int:
     store = _existing_store(config)
     if store is None:
         _print({"ok": False, "error": f"no log file at {resolve_sqlite_path(config)}"})
         return 1
-    results = store.verify()
+    _print({table: _head_json(head) for table, head in store.heads().items()})
+    return 0
+
+
+def _cmd_verify(config: Dict[str, Any], args: argparse.Namespace) -> int:
+    store = _existing_store(config)
+    if store is None:
+        _print({"ok": False, "error": f"no log file at {resolve_sqlite_path(config)}"})
+        return 1
+    expected: Dict[str, TableHead] | None = None
+    if args.expected_head:
+        try:
+            expected = _load_expected_head(args.expected_head)
+        except (OSError, ValueError) as exc:
+            _print({"ok": False, "error": f"expected head: {exc}"})
+            return 2
+    results = store.verify(expected_head=expected)
     ok = all(result.ok for result in results.values())
     _print(
         {
             "ok": ok,
+            "expected_head_checked": sorted(expected or {}),
             "tables": {
                 table: {
                     "ok": result.ok,
                     "rows_checked": result.rows_checked,
                     "first_bad_seq": result.first_bad_seq,
                     "reason": result.reason,
+                    "pruned_through": result.pruned_through,
+                    "head": _head_json(result.head),
                 }
                 for table, result in results.items()
             },
@@ -230,7 +273,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="lionlock.toml", help="Path to lionlock.toml")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="Show the log, export, and upload state")
-    sub.add_parser("verify", help="Verify the log's hash chains")
+    verify_parser = sub.add_parser("verify", help="Verify the log's hash chains")
+    verify_parser.add_argument(
+        "--expected-head",
+        metavar="FILE",
+        help="Also check the chains continue a head saved earlier by `head` ('-' reads stdin)",
+    )
+    sub.add_parser(
+        "head", help="Print each table's head; keep it where the log's writer cannot change it"
+    )
     preview_parser = sub.add_parser(
         "preview", help="Show exactly what the next upload would contain, without consuming it"
     )
@@ -267,6 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
 _COMMANDS = {
     "status": _cmd_status,
     "verify": _cmd_verify,
+    "head": _cmd_head,
     "preview": _cmd_preview,
     "export": _cmd_export,
     "inspect": _cmd_inspect,
