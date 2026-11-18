@@ -11,22 +11,26 @@ from lionlock.config import load_config, resolve_gating_enabled
 from lionlock.core.gating import evaluate_policy
 from lionlock.core.scoring import score_payload
 from lionlock.logging.event_log import build_signal_event, config_hash_from, log_event
+from lionlock.sample_data import load_sample_sessions
 from lionlock.telemetry.store import resolve_sqlite_path
 from lionlock.trust_overlay.logger import append_trust_record, build_trust_record
 
-FIXTURE_PATH = Path("tests/fixtures/sample_sessions.json")
+# None means the synthetic sample sessions packaged with lionlock (a copy of the test fixture), so
+# this script also works after `pip install`, outside a clone. Pass a path to use your own file.
+FIXTURE_PATH: str | Path | None = None
 
 
-def load_fixture_sessions(path: str | Path = FIXTURE_PATH) -> list[dict[str, Any]]:
-    """Load quickstart fixture sessions from JSON."""
-    fixture_path = Path(path)
-    records = json.loads(fixture_path.read_text(encoding="utf-8"))
+def load_fixture_sessions(path: str | Path | None = FIXTURE_PATH) -> list[dict[str, Any]]:
+    """Load quickstart sessions from JSON; the packaged synthetic samples when path is None."""
+    if path is None:
+        return load_sample_sessions()
+    records = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(records, list):
         raise ValueError("Fixture must be a list of sample sessions")
     return [record for record in records if isinstance(record, dict)]
 
 
-def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
+def run_quickstart(path: str | Path | None = FIXTURE_PATH) -> dict[str, int]:
     """Run end-to-end demo and print FLAGGED vs CLEAN summary."""
     config = load_config()
     config["logging_sql"]["enabled"] = False
