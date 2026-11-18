@@ -6,5 +6,6 @@ graft docs
 graft examples
 graft tests
 graft scripts
-prune tests/__pycache__
+# This test checks the repository's own verification harness, which is not part of the package.
+exclude tests/test_harness_porcelain.py
 global-exclude __pycache__ *.py[cod] *.db *.sqlite *.sqlite3 *.jsonl .DS_Store
