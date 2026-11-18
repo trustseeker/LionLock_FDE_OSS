@@ -97,7 +97,9 @@ def resolve_policy(
     _validate_policy_entry(entry)
 
     if base_config is None:
-        base_config = lionlock_config.load_config()
+        # Without the LIONLOCK_GATING_ENABLED override: a policy that leaves gating.enabled to the
+        # base config must still resolve to the same settings, and config_hash, in every shell.
+        base_config = lionlock_config.load_config(env_gating_override=False)
     base_subset = _policy_subset(base_config)
     entry_subset = _policy_subset(entry)
     resolved = _merge_dict(base_subset, entry_subset)

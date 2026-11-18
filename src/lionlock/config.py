@@ -336,11 +336,12 @@ def validate_policy_config(config: Mapping[str, Any], *, source: str = "config")
         raise ValueError(f"invalid {source}: " + "; ".join(problems))
 
 
-def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
+def load_config(path: str = "lionlock.toml", *, env_gating_override: bool = True) -> Dict[str, Any]:
     """Load config with safe defaults; missing files are non-fatal, invalid settings are not.
 
-    ``LIONLOCK_GATING_ENABLED`` overrides ``gating.enabled`` here, for live use. Replay does not
-    go through this override; it uses the ``gating.enabled`` its policy records.
+    ``LIONLOCK_GATING_ENABLED`` overrides ``gating.enabled`` for live use. Pass
+    ``env_gating_override=False`` to read ``gating.enabled`` from the file (or the default) only;
+    replay does, so that a recorded policy cannot be changed by the shell it is replayed in.
     """
     config = copy.deepcopy(DEFAULT_CONFIG)
     config_path = Path(path)
@@ -356,7 +357,8 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
 
     validate_policy_config(config, source=f"config {config_path}")
     config.setdefault("gating", {})
-    config["gating"]["enabled"] = resolve_gating_enabled(config)
+    if env_gating_override:
+        config["gating"]["enabled"] = resolve_gating_enabled(config)
 
     logging_cfg = config.get("logging", {})
     sql_cfg = config.get("logging_sql", {})

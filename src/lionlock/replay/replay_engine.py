@@ -106,9 +106,11 @@ def _evaluate_with_policy(bundle: SignalBundle, policy: PolicyBundle) -> Any:
     gating_enabled = True
     hallucination_mode = "warn_only"
     if isinstance(gating_cfg, dict):
+        # Only the recorded policy decides. LIONLOCK_GATING_ENABLED is a live-deployment switch
+        # applied by load_config; honouring it here made the same policy_version and config_hash
+        # replay as BLOCK in one shell and ALLOW in another.
         gating_enabled = bool(gating_cfg.get("enabled", True))
         hallucination_mode = str(gating_cfg.get("hallucination_mode") or "warn_only")
-    gating_enabled = lionlock_config.resolve_gating_enabled(policy.config)
     weights = signals_cfg.get("weights") if isinstance(signals_cfg, dict) else None
     enabled_signals = signals_cfg.get("enabled") if isinstance(signals_cfg, dict) else None
     if not isinstance(weights, dict):
@@ -166,6 +168,9 @@ def replay(
     *,
     round_digits: int = 6,
 ) -> ReplayResult:
+    lionlock_config.validate_policy_config(
+        policy.config, source=f"replay policy {policy.policy_version!r}"
+    )
     events_sorted = _dedupe_events(events)
     labels_present = labels is not None
     labels = labels or {}

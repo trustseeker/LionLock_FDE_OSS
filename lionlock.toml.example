@@ -45,7 +45,7 @@ uri = ""
 # stop_timeout_s = 2.0
 
 # Environment overrides:
-#   LIONLOCK_GATING_ENABLED=true|false     overrides [gating].enabled
+#   LIONLOCK_GATING_ENABLED=true|false     overrides [gating].enabled (live use; replay ignores it)
 #   LIONLOCK_TELEMETRY_UPLOAD=on|off       overrides [telemetry_upload].enabled
 #   LIONLOCK_TELEMETRY_ENDPOINT=https://…  overrides [telemetry_upload].endpoint
 #   DO_NOT_TRACK=1                          disables uploads regardless of any other setting
