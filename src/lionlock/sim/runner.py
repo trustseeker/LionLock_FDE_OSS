@@ -327,6 +327,10 @@ def _evaluate_policy(bundle: SignalBundle, policy_config: Dict[str, Any]) -> Any
         hallucination_mode=hallucination_mode,
         hard_gate_reasons_enabled=None,
         signal_bundle=bundle,
+        # The policy's own weights decide attribution as well as the aggregate. Without them the
+        # gate named the trigger by the default weights even when the policy had its own.
+        weights=weights,
+        enabled_signals=enabled_signals,
     )
 
 

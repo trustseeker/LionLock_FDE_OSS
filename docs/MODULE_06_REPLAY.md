@@ -67,6 +67,12 @@ Replay re-evaluates every event with the resolved policy and nothing else:
   `0 <= yellow < orange < red <= 1`, weights finite and `>= 0`, at least one enabled signal with
   a weight above zero, known signal names, `hallucination_mode` `"warn_only"` or `"block"`,
   `gating.enabled` a boolean). An invalid policy is a `policy error` and exit code `2`.
+- The policy's `signals.weights` and `signals.enabled` are passed to the gate, so they decide the
+  trigger and the `warn_only` hallucination check as well as the aggregate.
+- A stored score that is present but not a finite number (NaN, infinity, unparsable text) makes
+  that event an `invalid_signal_bundle`; it is never read as 0.0. An absent or `null` score still
+  reads as 0.0, for bundles from older schema versions. If the gate itself refuses an input, the
+  error propagates; replay never turns it into a decision.
 
 ## Labels (JSONL)
 
