@@ -22,15 +22,11 @@ So this file asserts behaviour rather than syntax.
 
 What this does not prove, stated as an open gap rather than a covered one: a C extension that
 calls ``connect(2)`` itself bypasses Python's ``socket`` module, so the blocker never sees it and
-the recorder stays empty either way. Compiled extensions *are* loaded here —
-``pydantic_core._pydantic_core`` is a third-party binary, pulled in by the strict payload
-validation in ``lionlock.signal_schemas``, alongside several of CPython's own. The module-name
-audits cannot speak to them: both are membership tests over named sets, and ``pydantic_core``
-appears in neither, so it passes both while being exactly the kind of module the gap describes.
-What narrows the risk is the size of the surface rather than a proof — a runtime dependency list
-of pydantic plus tomli below 3.11, short enough to audit by hand — and
-``test_scoring_core_loads_no_unlisted_third_party_extension`` pins the third-party binaries, so a
-new one arriving on the scoring path fails a test instead of passing unnoticed.
+the recorder stays empty either way. Only CPython's own compiled extensions are loaded on the
+scoring path now. Until 1.0.0b2 ``pydantic_core._pydantic_core``, a third-party binary, was
+loaded too, by the payload validation in ``lionlock.signal_schemas``; that validation is pure
+Python now. ``test_scoring_core_loads_no_unlisted_third_party_extension`` pins the third-party
+set to empty, so a binary arriving on the scoring path fails a test instead of passing unnoticed.
 """
 
 import hashlib
@@ -100,20 +96,20 @@ FORBIDDEN_THIRD_PARTY = frozenset(
 #
 #   socket     <- email.utils          selectors  <- socket
 #   urllib     <- pathlib (as_uri)     random     <- statistics (core uses pstdev)
-#   uuid       <- pydantic._internal._generate_schema
-#   secrets    <- pydantic.types
 #
 # Which of these appear depends on the interpreter, because the standard library keeps making its
 # own imports lazier: 3.11 and 3.12 load socket, selectors and urllib, and 3.13 loads none of the
 # three. That is why this is asserted as a subset rather than an exact set. A new entry is a
 # regression worth failing on; a disappearing one means the surface shrank, which is the direction
-# we want, and must not fail a test.
-CORE_ALLOWED_STDLIB = frozenset({"socket", "selectors", "urllib", "random", "uuid", "secrets"})
+# we want, and must not fail a test. (uuid and secrets were allowed here while pydantic validated
+# payloads; they are no longer loaded by the scoring core on 3.10 to 3.14.)
+CORE_ALLOWED_STDLIB = frozenset({"socket", "selectors", "urllib", "random"})
 
 # The telemetry and trust-overlay path additionally loads the opt-in uploader and the local log, so
-# a TLS and HTTP client and SQLite are resident. Pinned so the surface cannot grow unnoticed. See
-# the module docstring: making this set smaller is the fix, and the subset check welcomes it.
-TELEMETRY_ALLOWED_STDLIB = CORE_ALLOWED_STDLIB | {"ssl", "http", "sqlite3"}
+# a TLS and HTTP client and SQLite are resident, and the store and token auth use uuid and secrets.
+# Pinned so the surface cannot grow unnoticed. See the module docstring: making this set smaller is
+# the fix, and the subset check welcomes it.
+TELEMETRY_ALLOWED_STDLIB = CORE_ALLOWED_STDLIB | {"ssl", "http", "sqlite3", "uuid", "secrets"}
 
 # Third-party compiled extensions the scoring core may have resident. A C extension can call
 # connect(2) without going through Python's socket module, so ``network_blocked`` cannot see one.
@@ -130,9 +126,9 @@ TELEMETRY_ALLOWED_STDLIB = CORE_ALLOWED_STDLIB | {"ssl", "http", "sqlite3"}
 # would not see code reaching it directly. What it does cover is the binaries that arrive with a
 # dependency rather than with the interpreter, which is where an unaudited one would come from.
 #
-# ``pydantic_core`` is the only one, pulled in by the strict payload validation in
-# lionlock.signal_schemas. A subset check, like the module allowlists above.
-CORE_ALLOWED_THIRD_PARTY_EXTENSIONS = frozenset({"pydantic_core._pydantic_core"})
+# Empty. ``pydantic_core`` was the only one, pulled in by the payload validation in
+# lionlock.signal_schemas until that became pure Python in 1.0.0b2.
+CORE_ALLOWED_THIRD_PARTY_EXTENSIONS: frozenset[str] = frozenset()
 
 DECISION_FIELDS = (
     "decision_risk_score",
@@ -261,15 +257,19 @@ import sysconfig
 sys.path.insert(0, sys.argv[1])
 for name in sys.argv[2].split(","):
     importlib.import_module(name)
+# Snapshot first: the first sysconfig.get_paths() call imports modules of its own, which would
+# change sys.modules while it is being iterated. (A dependency used to have made that call already.)
+loaded = dict(sys.modules)
+stdlib = sysconfig.get_paths()["stdlib"]
 print(
     json.dumps(
         {
-            "modules": sorted({module.split(".")[0] for module in sys.modules}),
+            "modules": sorted({module.split(".")[0] for module in loaded}),
             "third_party_extensions": sorted(
                 name
-                for name, module in sys.modules.items()
+                for name, module in loaded.items()
                 if (getattr(module, "__file__", None) or "").endswith((".so", ".pyd", ".dylib"))
-                and not module.__file__.startswith(sysconfig.get_paths()["stdlib"])
+                and not module.__file__.startswith(stdlib)
             ),
         }
     )
