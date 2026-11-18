@@ -8,6 +8,8 @@ allowed_paths = [
   "src/lionlock/core/models.py",
   "docs/GATING_POLICY.md",
   "tests/test_gating_attribution.py",
+  "tests/test_module05_derived_influence.py",
+  "tests/test_module06_replay_determinism.py",
 ]
 +++
 
@@ -109,6 +111,21 @@ LL-0001's product records `severity` for its corpus. Under R2, two of its cases
 re-baselined by the maintainer from LL-0001's own oracle, updated to this decision rule, before the
 implementation exists. Its previous expected product becomes the recorded baseline, so nothing is
 lost. No other LL-0001 value changes.
+
+## Effect on existing tests
+
+Added to `allowed_paths` after the golden was generated, when the implementation showed that three
+existing tests pin behaviour this spec deliberately replaces. The golden, oracle and product are
+unchanged by this revision.
+
+- `tests/test_module05_derived_influence.py`: `test_tie_break_deterministic_for_raw_signals`
+  expected the zero-weight `hallucination_risk` as the trigger (R3 forbids it), and
+  `test_risk_score_clamped_and_finite_with_bad_inputs` expected `nan` and infinite evidence to be
+  read as 0.0. Review item A1 requires such evidence to be refused rather than coerced, so the gate
+  now raises `ValueError` naming the field, and finite out-of-range values are still clamped.
+- `tests/test_module06_replay_determinism.py`: its recorded event names `hallucination_risk` as
+  the trigger, which the current rule no longer produces for that evidence, so the replay found a
+  difference. The recorded event is updated to the trigger the rule produces.
 
 ## How this is checked
 

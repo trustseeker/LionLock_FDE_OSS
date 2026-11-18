@@ -1,7 +1,8 @@
 """LL-0002 oracle: what the gate should decide under D1, computed without calling the gate.
 
 ``expected(apply_rule=False)`` mirrors ``evaluate_policy``/``decide_gate`` as they were before
-LL-0002, and ``make golden`` checks that it reproduces the library exactly before writing the golden.
+LL-0002, and ``make golden`` checks that it reproduces the library exactly before writing the
+golden.
 ``expected(apply_rule=True)`` is the D1 rule as SPEC.md states it. The two differ only in the
 decision; scoring is out of scope, so signal scores, derived signals and the aggregate come from the
 real scorer in both.
@@ -35,7 +36,13 @@ from lionlock.core.scoring import (
 CORPUS_PATH = Path(__file__).resolve().parent / "corpus.json"
 INVALID_PROBE_ID = "19-banana-loop-off-topic"
 FATIGUE_INPUT_KEYS = ("entropy_decay", "turn_index", "drift_slope")
-NO_METADATA_MISSING = ("entropy_decay", "turn_index", "drift_slope", "duration_ms", "latency_window_stats")
+NO_METADATA_MISSING = (
+    "entropy_decay",
+    "turn_index",
+    "drift_slope",
+    "duration_ms",
+    "latency_window_stats",
+)
 SIGNALS = (
     "repetition_loopiness",
     "novelty_entropy_proxy",
@@ -153,9 +160,7 @@ def _validate(
         for key in enabled:
             if key not in SIGNALS:
                 raise ValueError("enabled_signals")
-    if not any(
-        resolved.get(key, 0.0) > 0 for key in SIGNALS if enabled is None or key in enabled
-    ):
+    if not any(resolved.get(key, 0.0) > 0 for key in SIGNALS if enabled is None or key in enabled):
         raise ValueError("no enabled signal has a positive weight")
 
 
