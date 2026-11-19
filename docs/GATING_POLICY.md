@@ -67,7 +67,7 @@ table above. Otherwise it names the one policy that changed the action:
 | `policy_adjustment` | when | action |
 | --- | --- | --- |
 | `"warn_only_hallucination"` | `hallucination_mode = "warn_only"`, severity is red, and the reply would **not** be red without the hallucination evidence (`hallucination_risk` and `low_conf_halluc`) | `REFRESH`, trigger `hallucination_risk` or `low_conf_halluc` |
-| `"hard_gate_reason_disabled"` | the action is `BLOCK` and `hard_gate_reasons_enabled` is given but does not list the reason code | `REFRESH` |
+| `"hard_gate_reason_disabled"` | the action is `BLOCK`, `hard_gate_reasons_enabled` is given, and the evidence whose reason is on that list would **not** be red on its own | `REFRESH` |
 | `"gating_disabled"` | gating is disabled and the action would not be `ALLOW` | `ALLOW` |
 
 Warn-only works out how red the reply would be if hallucination evidence were ignored: the
@@ -75,6 +75,11 @@ weighted mean of the other enabled signals, and the largest other derived signal
 red, the reply is blocked and the trigger names the evidence that justified the block. A reply
 that loops on one word is blocked for repetition even when its hallucination score is also high.
 With `hallucination_mode = "block"` nothing is softened.
+
+The hard-gate list works the same way: a block stands when the evidence whose reason code is on
+the list would be red by itself, and the trigger then names that evidence, so the reason is
+always a listed one. In warn-only mode, hallucination evidence does not count towards it. Both
+checks average the scores as given and clamp the result, the same arithmetic as the raw channel.
 
 Raising any one signal score or derived value never lowers the action. This is a property of the
 gate's inputs. `low_conf_halluc` is itself computed from the scores and falls as novelty risk
