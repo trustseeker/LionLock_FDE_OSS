@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from lionlock.telemetry.store import LogStore
-
 from lionlock.trust_overlay.logger import (
     _RESPONSE_HASH_CONTEXT,
     build_trust_record,
