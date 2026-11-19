@@ -4,7 +4,7 @@ import sqlite3
 import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
 try:
@@ -18,7 +18,20 @@ from lionlock.utils.sql_batch_writer import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BACKOFF_MS,
     DEFAULT_STOP_TIMEOUT_S,
+    QueuedEvent,
     SQLBatchWriter,
+)
+from lionlock.utils.sql_writer_keys import (
+    WRITER_KEY_COLUMNS,
+    WRITERS_COLUMNS,
+    WRITERS_TABLE,
+    claim_writer_id_sqlalchemy,
+    claim_writer_id_sqlite,
+    create_writers_table_sql,
+    ensure_sqlalchemy_writer_key,
+    ensure_sqlite_writer_key_index,
+    stored_seqs_params,
+    stored_seqs_sql,
 )
 
 from .connection import load_dotenv, validate_identifier
@@ -64,7 +77,11 @@ PUBLIC_SIGNALS_COLUMNS: List[Tuple[str, str]] = [
         AUTH_SIGNATURE_FIELD,
         f"TEXT CHECK ({AUTH_SIGNATURE_FIELD} IS NULL OR length({AUTH_SIGNATURE_FIELD}) >= 64)",
     ),
+    *WRITER_KEY_COLUMNS,
 ]
+# Earlier signals layouts, as prefixes of PUBLIC_SIGNALS_COLUMNS, oldest first: the initial OSS
+# schema, then with the two auth columns. Each is upgraded by adding the columns it lacks.
+_EARLIER_SIGNALS_LAYOUTS = (len(PUBLIC_SIGNALS_COLUMNS) - 4, len(PUBLIC_SIGNALS_COLUMNS) - 2)
 
 FAILSAFE_COLUMNS: List[Tuple[str, str]] = [
     ("timestamp_utc", "TEXT"),
@@ -88,6 +105,7 @@ def _canonicalize_decision(value: Any) -> str:
     if text.upper() == "ERROR":
         return "ERROR"
     return canonical_gating_decision(text)
+
 
 _WRITER: "SQLTelemetryWriter | None" = None
 _WRITER_KEY: Tuple[Any, ...] | None = None
@@ -146,10 +164,7 @@ def resolve_sql_config(config: Dict[str, Any]) -> Dict[str, Any]:
     env_token = _env_first(*_SQL_TOKEN_ENV_KEYS)
     env_uri = _env_first(*_SQL_URI_ENV_KEYS)
     token = (
-        env_token
-        or env_uri
-        or str(cfg.get("token", "")).strip()
-        or str(cfg.get("uri", "")).strip()
+        env_token or env_uri or str(cfg.get("token", "")).strip() or str(cfg.get("uri", "")).strip()
     )
     if not token:
         raise RuntimeError("logging_sql.token is required when SQL telemetry is enabled.")
@@ -200,12 +215,14 @@ def _sqlite_telemetry_transaction(
     """Validate native telemetry tables before any DDL/DML, under the same write lock.
 
     Column compatibility is not proof of ownership. Unknown layouts are never rebuilt;
-    the only upgrade is adding the two auth columns absent from the initial OSS schema.
+    the only upgrades add the columns an earlier signals layout lacks (the two auth
+    columns, then the two writer key columns) and the UNIQUE index on the writer key.
     """
     schemas = {
         "lionlock_sessions": SESSIONS_COLUMNS,
         "lionlock_signals": PUBLIC_SIGNALS_COLUMNS,
         "lionlock_failsafe": FAILSAFE_COLUMNS,
+        WRITERS_TABLE: WRITERS_COLUMNS,
     }
     requested = list(required)
     for table, columns in requested:
@@ -224,7 +241,7 @@ def _sqlite_telemetry_transaction(
             }
             if not table_kinds:
                 raise ValueError("SQL telemetry schema validation requires SQLite 3.37 or newer")
-            legacy_signals = False
+            signals_upgrade: List[Tuple[str, str]] = []
             for table, columns in schemas.items():
                 objects = conn.execute(
                     "SELECT type FROM sqlite_master WHERE name=? COLLATE NOCASE", (table,)
@@ -239,16 +256,21 @@ def _sqlite_telemetry_transaction(
                 }
                 if actual == _sqlite_shape(columns):
                     continue
-                if table == "lionlock_signals" and actual == _sqlite_shape(columns[:-2]):
-                    legacy_signals = True
-                    continue
+                if table == "lionlock_signals":
+                    earlier = [
+                        n for n in _EARLIER_SIGNALS_LAYOUTS if actual == _sqlite_shape(columns[:n])
+                    ]
+                    if earlier:
+                        signals_upgrade = columns[earlier[0] :]
+                        continue
                 raise ValueError(f"Incompatible SQL telemetry schema: {table}")
             # Validate every existing target before creating or upgrading any requested table.
             for table, columns in requested:
                 conn.execute(_create_table_sql(table, columns))
-                if table == "lionlock_signals" and legacy_signals:
-                    for name, definition in PUBLIC_SIGNALS_COLUMNS[-2:]:
+                if table == "lionlock_signals":
+                    for name, definition in signals_upgrade:
                         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+                    ensure_sqlite_writer_key_index(conn, table)
             yield conn
             conn.execute("COMMIT")
         except BaseException:
@@ -264,6 +286,19 @@ def _init_sqlalchemy_table(uri: str, table: str, columns: Iterable[Tuple[str, st
     ddl = _create_table_sql(table, columns)
     with engine.begin() as conn:
         conn.execute(text(ddl))
+
+
+def _init_sqlalchemy_tables(engine: Any, sessions_table: str, table: str) -> None:
+    """Create the sessions, signals and writers tables, and give the signals table its
+    writer key, in one transaction."""
+    if text is None:
+        raise RuntimeError("SQLAlchemy is required for non-sqlite URIs.")
+    base = [name for name, _ in PUBLIC_SIGNALS_COLUMNS[: -len(WRITER_KEY_COLUMNS)]]
+    with engine.begin() as conn:
+        conn.execute(text(_create_table_sql(sessions_table, SESSIONS_COLUMNS)))
+        conn.execute(text(_create_table_sql(table, PUBLIC_SIGNALS_COLUMNS)))
+        ensure_sqlalchemy_writer_key(conn, table, base)
+        conn.execute(text(create_writers_table_sql()))
 
 
 def init_db(
@@ -284,7 +319,11 @@ def init_db(
     sqlite_path = _sqlite_path_from_uri(uri)
     try:
         if sqlite_path is not None:
-            required = [(sessions_table, SESSIONS_COLUMNS), (table, PUBLIC_SIGNALS_COLUMNS)]
+            required = [
+                (sessions_table, SESSIONS_COLUMNS),
+                (table, PUBLIC_SIGNALS_COLUMNS),
+                (WRITERS_TABLE, WRITERS_COLUMNS),
+            ]
             if failsafe_table:
                 required.append((failsafe_table, FAILSAFE_COLUMNS))
             with _sqlite_telemetry_transaction(sqlite_path, required):
@@ -292,8 +331,11 @@ def init_db(
             return True, "Initialized sqlite tables."
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot initialize non-sqlite URI."
-        _init_sqlalchemy_table(uri, sessions_table, SESSIONS_COLUMNS)
-        _init_sqlalchemy_table(uri, table, PUBLIC_SIGNALS_COLUMNS)
+        engine = create_engine(uri)
+        try:
+            _init_sqlalchemy_tables(engine, sessions_table, table)
+        finally:
+            engine.dispose()
         if failsafe_table:
             _init_sqlalchemy_table(uri, failsafe_table, FAILSAFE_COLUMNS)
         return True, "Initialized SQL tables."
@@ -405,29 +447,33 @@ class SQLTelemetryWriter(SQLBatchWriter):
             if self.sqlite_path is not None:
                 with _sqlite_telemetry_transaction(
                     self.sqlite_path,
-                    [(self.sessions_table, SESSIONS_COLUMNS), (self.table, PUBLIC_SIGNALS_COLUMNS)],
+                    [
+                        (self.sessions_table, SESSIONS_COLUMNS),
+                        (self.table, PUBLIC_SIGNALS_COLUMNS),
+                        (WRITERS_TABLE, WRITERS_COLUMNS),
+                    ],
                     timeout_s=self.connect_timeout_s,
-                ):
-                    pass
+                ) as conn:
+                    self.writer_id = claim_writer_id_sqlite(conn, self.sink_name, self.table)
             else:
                 if create_engine is None or text is None:
                     raise RuntimeError("SQLAlchemy not installed.")
                 self.engine = create_engine(self.uri)
-                ddl_sessions = _create_table_sql(self.sessions_table, SESSIONS_COLUMNS)
-                ddl_events = _create_table_sql(self.table, PUBLIC_SIGNALS_COLUMNS)
-                with self.engine.begin() as conn:
-                    conn.execute(text(ddl_sessions))
-                    conn.execute(text(ddl_events))
+                _init_sqlalchemy_tables(self.engine, self.sessions_table, self.table)
+                self.writer_id = claim_writer_id_sqlalchemy(self.engine, self.sink_name, self.table)
         except Exception as exc:
             self.available = False
             self.error = f"SQL telemetry init failed: {exc}"
 
-    def _write_batch(self, events: List[Dict[str, Any]]) -> None:
+    def _write_batch(self, items: List[QueuedEvent]) -> None:
         columns = ",".join(name for name, _ in PUBLIC_SIGNALS_COLUMNS if name != "event_pk")
         if self.sqlite_path is not None:
             placeholders = ",".join("?" for _ in columns.split(","))
             sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
-            rows = [_event_to_row(event, event.get("session_pk")) for event in events]
+            rows = [
+                (*_event_to_row(item.event, item.event.get("session_pk")), self.writer_id, item.seq)
+                for item in items
+            ]
             # Closing without a commit rolls back, so a failed insert stores nothing.
             with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
                 conn.executemany(sql, rows)
@@ -437,13 +483,31 @@ class SQLTelemetryWriter(SQLBatchWriter):
             raise RuntimeError("SQLAlchemy not installed.")
         values = ",".join(f":{name}" for name in columns.split(","))
         stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
+        named_rows = [
+            {
+                **_event_to_named_row(item.event, item.event.get("session_pk")),
+                "writer_id": self.writer_id,
+                "writer_seq": item.seq,
+            }
+            for item in items
+        ]
         with self.engine.connect() as conn:
             transaction = conn.begin()
-            conn.execute(
-                stmt,
-                [_event_to_named_row(event, event.get("session_pk")) for event in events],
-            )
+            conn.execute(stmt, named_rows)
             self._commit(transaction.commit)
+
+    def _stored_seqs(self, items: Sequence[QueuedEvent]) -> Set[int]:
+        sql = stored_seqs_sql(self.table)
+        params = stored_seqs_params(self.writer_id, [item.seq for item in items])
+        if self.sqlite_path is not None:
+            with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
+                rows = conn.execute(sql, params).fetchall()
+        else:
+            if self.engine is None or text is None:
+                raise RuntimeError("SQLAlchemy not installed.")
+            with self.engine.connect() as conn:
+                rows = conn.execute(text(sql), params).fetchall()
+        return {int(row[0]) for row in rows}
 
 
 def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
@@ -522,9 +586,7 @@ def enqueue_event(
     if session_pk is not None:
         event = dict(event)
         event["session_pk"] = session_pk
-    ok, reason, prepared = prepare_event_for_sql(
-        event, token_config=resolved_cfg.get("token_auth")
-    )
+    ok, reason, prepared = prepare_event_for_sql(event, token_config=resolved_cfg.get("token_auth"))
     if not ok:
         raise RuntimeError(f"SQL telemetry token verification failed: {reason}.")
     event = prepared

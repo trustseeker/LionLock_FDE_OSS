@@ -1,5 +1,5 @@
 import math
-from typing import Dict, Iterable
+from typing import Callable, Dict, Iterable
 
 from .models import (
     DerivedSignals,
@@ -171,7 +171,7 @@ def _validate_policy(
         raise ValueError(
             f"hallucination_mode must be one of {HALLUCINATION_MODES}, got {hallucination_mode!r}"
         )
-    if thresholds:
+    if thresholds is not None:
         for key in ("yellow", "orange", "red"):
             if key not in thresholds:
                 raise ValueError(f"thresholds is missing {key!r}")
@@ -214,23 +214,39 @@ def _validate_evidence(signal_scores: SignalScores, derived_signals: DerivedSign
                 raise ValueError(f"{group}[{key!r}] must be a finite number, got {value!r}")
 
 
-def _non_hallucination_raw(
-    safe_scores: Dict[str, float], weights: Dict[str, float], enabled_keys: list[str]
-) -> float:
-    """The weighted aggregate recomputed without ``hallucination_risk``.
+def _restricted_risk(
+    *,
+    allowed: Callable[[str], bool],
+    scores: Dict[str, float],
+    weights: Dict[str, float],
+    enabled_keys: list[str],
+    derived_risk_map: Dict[str, float],
+    contributions: Dict[str, float],
+    thresholds: Dict[str, float],
+) -> tuple[bool, str]:
+    """Is the reply still red using only the allowed evidence, and which evidence drives it?
 
-    It says how red the reply would be if hallucination evidence were ignored, using the same
-    arithmetic, in the same order, as ``aggregate_score``.
+    The weighted mean uses the scores as given (finite, not clamped one by one) and is clamped
+    afterwards: the same arithmetic as the raw channel, so with every signal allowed it equals it.
+    Restricting evidence can only lower this risk, and raising any score can only raise it, which
+    keeps warn-only and the hard-gate list monotone (LL-0002 R4, R5, R6).
     """
     weighted_sum = 0.0
     weight_total = 0.0
     for key in enabled_keys:
-        if key == "hallucination_risk":
+        if not allowed(key):
             continue
         weight = weights.get(key, 0.0)
-        weighted_sum += safe_scores[key] * weight
+        weighted_sum += float(scores[key]) * weight
         weight_total += weight
-    return _safe_unit_interval(weighted_sum / weight_total if weight_total else 0.0)
+    sub_raw = _safe_unit_interval(weighted_sum / weight_total if weight_total else 0.0)
+    sub_derived = {key: value for key, value in derived_risk_map.items() if allowed(key)}
+    sub_derived_channel = max(sub_derived.values()) if sub_derived else 0.0
+    is_red = severity_band(_clamp(max(sub_raw, sub_derived_channel)), thresholds) == "red"
+    if sub_derived_channel >= sub_raw:
+        return is_red, _pick_by_order(sub_derived, TRIGGER_SIGNAL_ORDER)
+    sub_contributions = {key: value for key, value in contributions.items() if allowed(key)}
+    return is_red, _pick_by_order(sub_contributions, TRIGGER_SIGNAL_ORDER)
 
 
 def _evaluate_policy_with_scores(
@@ -287,39 +303,48 @@ def _evaluate_policy_with_scores(
 
     gating_decision = _DEFAULT_ACTION[severity]
     policy_adjustment: str | None = None
+    raw_scores = signal_scores.as_dict()
+
+    def still_red(allowed: Callable[[str], bool]) -> tuple[bool, str]:
+        return _restricted_risk(
+            allowed=allowed,
+            scores=raw_scores,
+            weights=resolved_weights,
+            enabled_keys=enabled_keys,
+            derived_risk_map=derived_risk_map,
+            contributions=contributions,
+            thresholds=thresholds,
+        )
+
     if severity == "red" and hallucination_mode == "warn_only":
-        non_raw = _non_hallucination_raw(safe_signal_scores, resolved_weights, enabled_keys)
-        non_derived = {
-            key: value
-            for key, value in derived_risk_map.items()
-            if key not in HALLUCINATION_EVIDENCE
-        }
-        non_derived_channel = max(non_derived.values()) if non_derived else 0.0
-        non_risk = _clamp(max(non_raw, non_derived_channel))
-        if severity_band(non_risk, thresholds=thresholds) == "red":
+        red_without_hallucination, driver = still_red(lambda key: key not in HALLUCINATION_EVIDENCE)
+        if red_without_hallucination:
             # Red without the hallucination evidence: block, and name what justified it.
-            if non_derived_channel >= non_raw:
-                trigger_signal = _pick_by_order(non_derived, TRIGGER_SIGNAL_ORDER)
-            else:
-                trigger_signal = _pick_by_order(
-                    {k: v for k, v in contributions.items() if k not in HALLUCINATION_EVIDENCE},
-                    TRIGGER_SIGNAL_ORDER,
-                )
+            trigger_signal = driver
         else:
             gating_decision = "REFRESH"
             policy_adjustment = "warn_only_hallucination"
             trigger_signal = (
                 "low_conf_halluc" if derived_channel >= raw_channel else "hallucination_risk"
             )
+
+    if gating_decision == "BLOCK" and hard_gate_reasons_enabled is not None:
+        listed = set(hard_gate_reasons_enabled)
+
+        def is_listed(key: str) -> bool:
+            if hallucination_mode == "warn_only" and key in HALLUCINATION_EVIDENCE:
+                return False
+            return _reason_code_for(key) in listed
+
+        red_on_listed, driver = still_red(is_listed)
+        if red_on_listed:
+            # The listed evidence alone justifies the block; the reason is always a listed one.
+            trigger_signal = driver
+        else:
+            gating_decision = "REFRESH"
+            policy_adjustment = "hard_gate_reason_disabled"
     reason_code = _reason_code_for(trigger_signal)
 
-    if (
-        gating_decision == "BLOCK"
-        and hard_gate_reasons_enabled is not None
-        and reason_code not in set(hard_gate_reasons_enabled)
-    ):
-        gating_decision = "REFRESH"
-        policy_adjustment = "hard_gate_reason_disabled"
     if not gating_enabled and gating_decision != "ALLOW":
         gating_decision = "ALLOW"
         policy_adjustment = "gating_disabled"
@@ -359,6 +384,13 @@ def evaluate_policy(
     finite or not ``0 <= yellow < orange < red <= 1``, or an unknown ``hallucination_mode``. Also
     raises ValueError, naming the field, when a signal or derived score is not a finite number.
     """
+    _validate_policy(
+        thresholds=thresholds,
+        hallucination_mode=hallucination_mode,
+        weights=weights,
+        enabled_signals=enabled_signals,
+    )
+    _validate_evidence(bundle.signal_scores, bundle.derived_signals)
     aggregate = aggregate_score(bundle, weights=weights, enabled_signals=enabled_signals)
     return _evaluate_policy_with_scores(
         aggregate=aggregate,

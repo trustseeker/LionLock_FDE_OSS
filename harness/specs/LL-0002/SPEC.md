@@ -56,9 +56,11 @@ because the gate is where the coercion happens.
   `clamp(max(raw, derived))`, unchanged.
 - **Contribution** of signal `k`: `W[k] * score[k]`. A signal is **eligible** to be a raw-channel
   trigger only if it is enabled and `W[k] > 0`.
-- **Non-hallucination raw**: the weighted aggregate recomputed over the enabled signals other than
-  `hallucination_risk`, in signal order, as `sum(W[k] * score[k]) / sum(W[k])`, and 0 if those
-  weights sum to 0. It answers "how red would this reply be if hallucination evidence were
+- **Restricted raw** over a set of allowed evidence: the weighted aggregate recomputed over the
+  enabled signals in that set, in signal order, as `sum(W[k] * score[k]) / sum(W[k])` using the
+  scores as given (finite, not clamped one by one), then clamped to [0, 1]; 0 if those weights sum
+  to 0. The **restricted risk** is `clamp(max(restricted raw, largest admitted derived value in the
+  set))`. **Non-hallucination raw** is the restricted raw over non-hallucination evidence. It answers "how red would this reply be if hallucination evidence were
   ignored?". With the default weight of 0.00 on `hallucination_risk` it equals the raw channel.
 - **Action rank**: ALLOW < REFRESH < BLOCK.
 
@@ -83,8 +85,11 @@ because the gate is where the coercion happens.
     `hallucination_risk`.
   - With `hallucination_mode = "block"`, R3 applies unchanged and nothing is softened.
 - **R5 Adjustments are explicit.** After R4, if the action is BLOCK and
-  `hard_gate_reasons_enabled` is given and does not contain the reason code, the action is REFRESH
-  with `policy_adjustment = "hard_gate_reason_disabled"`. If gating is disabled and the action is
+  `hard_gate_reasons_enabled` is given, compute the restricted risk over the evidence whose reason
+  code is listed (excluding hallucination evidence when the mode is `"warn_only"`). If it is red,
+  the action stays BLOCK and the trigger is chosen by R3's rule over that evidence only, so the
+  reason is always a listed one. Otherwise the action is REFRESH with
+  `policy_adjustment = "hard_gate_reason_disabled"`. If gating is disabled and the action is
   not ALLOW, the action is ALLOW with `policy_adjustment = "gating_disabled"`.
   `policy_adjustment` is `None` exactly when the action is the band's default (red BLOCK, orange and
   yellow REFRESH, green ALLOW).
@@ -126,6 +131,22 @@ unchanged by this revision.
 - `tests/test_module06_replay_determinism.py`: its recorded event names `hallucination_risk` as
   the trigger, which the current rule no longer produces for that evidence, so the replay found a
   difference. The recorded event is updated to the trigger the rule produces.
+
+## Revision after review (19 November 2026)
+
+Review of the implementation found that the first version of this spec contradicted itself:
+
+- R5 filtered a BLOCK by the reason of the single winning trigger. Raising one score could change
+  which signal won a tie, and so turn a BLOCK into a REFRESH, which R6 forbids. Example: weights
+  repetition 1 and context 1, mode "block", hard gate ["repetition_loop"], repetition 1.0: context
+  0.8 gave BLOCK, context 1.0 gave REFRESH. R5 now asks whether the listed evidence alone is red,
+  which is monotone, and the pair is an acceptance test.
+- R4's non-hallucination raw clamped each score before averaging, so a finite out-of-range score
+  could make a reply red overall yet not red without the hallucination evidence, even with
+  hallucination weight 0. It now uses the scores as given and clamps the result.
+
+The oracle was changed first and the golden regenerated from it against the library as it was
+before LL-0002, as for the original golden. The implementation was changed after.
 
 ## How this is checked
 
