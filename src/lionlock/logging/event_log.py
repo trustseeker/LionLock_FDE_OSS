@@ -8,6 +8,7 @@ from .privacy import find_forbidden_content, scrub_forbidden_keys
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD
 from lionlock.core.models import canonical_gating_decision
 from lionlock.telemetry.store import open_store
+from lionlock.utils.private_files import ensure_private_dir, open_private_append
 
 
 def _serialize(obj: Dict[str, Any]) -> str:
@@ -238,8 +239,10 @@ def append_event(
         notes_max_length=notes_max_length,
     )
     log_path = Path(path).expanduser()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as handle:
+    # A new file is owner-only (0600) from creation, new directories 0700; existing ones keep
+    # their modes.
+    ensure_private_dir(log_path.parent)
+    with open_private_append(log_path) as handle:
         handle.write(_serialize(record) + "\n")
 
 

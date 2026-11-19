@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,17 +21,46 @@ from lionlock.logging.token_auth import (  # noqa: E402
     token_id,
 )
 
+# A new file, never an existing one or the target of a symlink, created owner-only (0600) by
+# the same call that creates it, so the token is never readable by anyone else, even briefly.
+_CREATE_NEW = (
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+)
+
+
+def _create_new(path: Path, data: bytes) -> None:
+    fd = os.open(path, _CREATE_NEW, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1  # owned by the file object now
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        path.unlink(missing_ok=True)
+        raise
+
 
 def _write_secure(path: Path, content: str, *, overwrite: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and not overwrite:
-        raise FileExistsError(f"{path} already exists")
-    path.write_text(content, encoding="utf-8")
+    data = content.encode("utf-8")
+    if not overwrite:
+        try:
+            _create_new(path, data)
+        except FileExistsError:
+            raise FileExistsError(f"{path} already exists") from None
+        return
+    # --force: write a new private file next to the old one, then rename it over the old path.
+    # The rename replaces a symlink itself instead of writing through it to its target.
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    _create_new(temp, data)
     try:
-        os.chmod(path, 0o600)
-    except Exception:
-        # Best-effort; permissions may not be supported on all platforms.
-        pass
+        os.replace(temp, path)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
 
 
 def _resolve_db_uri(explicit: str) -> str:

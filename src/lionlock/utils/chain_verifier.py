@@ -1,4 +1,14 @@
-"""Hash-chain verification helpers for append-only LionLock logs."""
+"""Hash-chain verification helpers for append-only LionLock logs.
+
+Two entry formats exist, and one chain may hold both:
+
+- **Format 2** (written since 1.0.0b2) carries ``"format": 2``. Its hash is SHA-256 over the
+  strict canonical JSON of the entry without ``sha256`` (RFC 8785, see ``lionlock.utils.jcs``
+  and ``docs/AUDIT_LOGGING.md``), so any language can verify it.
+- **Legacy** entries have no ``format`` member. Their hash is SHA-256 over Python's
+  ``json.dumps(..., sort_keys=True, separators=(",", ":"))``. They are verified exactly as before,
+  including their known false mismatches (see ``legacy_entry_hash``); old logs are never rewritten.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +17,13 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from lionlock.utils.jcs import CanonicalFormError, canonical_bytes
+
 GENESIS_HASH = "0" * 64
+
+FORMAT_KEY = "format"
+CURRENT_FORMAT = 2
+FORMAT_2_FIELDS = frozenset({"ts", "event", FORMAT_KEY, "payload", "prev_hash", "sha256"})
 
 
 class TamperDetectedError(RuntimeError):
@@ -15,14 +31,66 @@ class TamperDetectedError(RuntimeError):
 
 
 def canonical_serialize(entry: dict[str, Any]) -> str:
-    """Serialize an entry with deterministic key ordering for stable hashing."""
+    """The legacy (unmarked) serialization: Python ``json.dumps`` with sorted keys.
+
+    Not portable: it writes Python's float repr and ``NaN``/``Infinity``, and it sorts integer
+    keys numerically although they are read back as text. Kept only to verify legacy entries.
+    """
     return json.dumps(entry, sort_keys=True, separators=(",", ":"))
 
 
-def entry_hash(entry: dict[str, Any]) -> str:
-    """Compute the deterministic SHA-256 hash for a chain entry."""
+def legacy_entry_hash(entry: dict[str, Any]) -> str:
+    """Hash of an unmarked entry, computed exactly as before format 2 existed."""
     payload = {key: value for key, value in entry.items() if key != "sha256"}
     return hashlib.sha256(canonical_serialize(payload).encode("utf-8")).hexdigest()
+
+
+def is_format_2(entry: dict[str, Any]) -> bool:
+    """True for an entry marked ``"format": 2``. A JSON number equal to 2 counts, as it would in
+    any other language; ``true`` does not."""
+    marker = entry.get(FORMAT_KEY)
+    return (
+        isinstance(marker, (int, float))
+        and not isinstance(marker, bool)
+        and marker == CURRENT_FORMAT
+    )
+
+
+def format_2_hash(entry: dict[str, Any]) -> str:
+    """SHA-256 over the canonical JSON of a format 2 entry without its ``sha256`` member.
+
+    Raises ``CanonicalFormError`` if the entry holds a value with no canonical form.
+    """
+    body = {key: value for key, value in entry.items() if key != "sha256"}
+    return hashlib.sha256(canonical_bytes(body, exact_integers=False)).hexdigest()
+
+
+def entry_hash(entry: dict[str, Any]) -> str:
+    """The hash an entry must carry: format 2 rule if it is marked, the legacy rule otherwise."""
+    if FORMAT_KEY not in entry:
+        return legacy_entry_hash(entry)
+    if not is_format_2(entry):
+        raise ValueError("unsupported entry format")
+    return format_2_hash(entry)
+
+
+def _expected_hash(entry: dict[str, Any], number: int) -> str:
+    if FORMAT_KEY not in entry:
+        return legacy_entry_hash(entry)
+    if not is_format_2(entry):
+        marker = repr(entry.get(FORMAT_KEY))[:40]
+        raise TamperDetectedError(f"Entry #{number} has unsupported format {marker}")
+    if set(entry) != FORMAT_2_FIELDS:
+        raise TamperDetectedError(
+            f"Entry #{number} does not have exactly the format 2 fields "
+            f"({', '.join(sorted(FORMAT_2_FIELDS))})"
+        )
+    try:
+        return format_2_hash(entry)
+    except CanonicalFormError as exc:
+        raise TamperDetectedError(
+            f"Entry #{number} is not in canonical form ({exc.path}: {exc.problem})"
+        ) from exc
 
 
 def verify_chain(
@@ -37,6 +105,9 @@ def verify_chain(
     newest entries, or rewriting the whole log, is detected only against a head recorded outside
     the log: pass it as ``expected_head`` (last ``sha256``) and/or ``expected_count``. A log that
     has grown since the head was recorded passes as long as the recorded head is still in it.
+
+    Each entry is checked by its own format's rule, so a legacy log that later gained format 2
+    entries verifies as one chain.
     """
     previous_hash = GENESIS_HASH
     seen_head = expected_head is None or expected_head == GENESIS_HASH
@@ -48,7 +119,7 @@ def verify_chain(
         if expected_prev != previous_hash:
             raise TamperDetectedError(f"Entry #{count} prev_hash mismatch")
         current_hash = str(entry.get("sha256") or "")
-        expected_hash = entry_hash(entry)
+        expected_hash = _expected_hash(entry, count)
         if current_hash != expected_hash:
             raise TamperDetectedError(f"Entry #{count} hash mismatch")
         previous_hash = current_hash
@@ -63,6 +134,21 @@ def verify_chain(
         )
     if not seen_head:
         raise TamperDetectedError("Recorded head is not in the log (truncated or rewritten)")
+
+
+class _DuplicateMember(ValueError):
+    pass
+
+
+def _reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """``json.loads`` keeps the last of repeated keys, so two readers could see different values
+    in the same line. A line with a repeated key is never accepted as part of a chain."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateMember(key)
+        result[key] = value
+    return result
 
 
 def verify_chain_file(
@@ -82,7 +168,11 @@ def verify_chain_file(
             if not text:
                 continue
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(text, object_pairs_hook=_reject_duplicate_members)
+            except _DuplicateMember as exc:
+                raise TamperDetectedError(
+                    f"Duplicate member {str(exc)!r} at line {line_number}"
+                ) from exc
             except json.JSONDecodeError as exc:
                 raise TamperDetectedError(f"Invalid JSON at line {line_number}") from exc
             if not isinstance(parsed, dict):
