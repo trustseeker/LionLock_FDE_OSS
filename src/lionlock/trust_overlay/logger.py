@@ -3,14 +3,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import platform
-import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, cast
 
 from lionlock.telemetry.store import open_store, sqlite_logging_enabled
+from lionlock.utils.private_files import ensure_private_dir, open_private_append
 from lionlock.versioning import get_lionlock_version
 
 from .config import (
@@ -29,9 +28,23 @@ from .engine import (
     map_label,
     trigger_flags,
 )
-from .schemas import TrustRecord, sanitize_record, signal_summary_from, validate_trust_record
+from .schemas import (
+    HASH_SCHEME_CALLER,
+    HASH_SCHEME_KEYED,
+    HASH_SCHEME_NONE,
+    TrustRecord,
+    sanitize_record,
+    signal_summary_from,
+    validate_trust_record,
+)
 from .sql_sink import enqueue_record as enqueue_sql_record
 from .versioning import code_fingerprint
+
+# Domain separation. pseudonymous_user_key() is HMAC(salt, user_id.encode("utf-8")), so the
+# response-hash key must be derived from an input that no user_id can produce. UTF-8 never
+# contains the byte 0xFF, so a context that starts with it can never be the encoding of a user_id,
+# and no stored pseudonymous_user_key can ever equal (and so disclose) the response-hash key.
+_RESPONSE_HASH_CONTEXT = b"\xfflionlock/trust_overlay/response_hash/v1"
 
 
 def _serialize(entry: Dict[str, Any]) -> str:
@@ -43,7 +56,16 @@ def utc_now_iso() -> str:
 
 
 def hash_response(text: str) -> str:
+    """Unkeyed SHA-256 of a reply. Short replies can be recovered from it by guessing, so
+    ``build_trust_record`` no longer uses it; kept only for existing callers."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def keyed_response_hash(text: str, salt: str) -> str:
+    """HMAC-SHA256 of a reply under a key derived from ``salt``; not reversible by guessing
+    without the salt. The same salt and reply always give the same value."""
+    key = hmac.new(salt.encode("utf-8"), _RESPONSE_HASH_CONTEXT, hashlib.sha256).digest()
+    return hmac.new(key, text.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def pseudonymous_user_key(user_id: str, salt: str) -> str:
@@ -61,10 +83,6 @@ def _daily_annotations_path(base_dir: str | Path, date: datetime | None = None) 
     date = date or datetime.now(timezone.utc)
     filename = f"annotations_{date:%Y-%m-%d}.jsonl"
     return Path(base_dir) / filename
-
-
-def _hash_value(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def build_model_config_snapshot(
@@ -125,14 +143,8 @@ def build_deployment_context_snapshot(
     if platform_info:
         snapshot["platform"] = platform_info
 
-    hostname = socket.gethostname()
-    if hostname:
-        snapshot["host_id_hash"] = _hash_value(hostname)
-
-    container_id = os.getenv("CONTAINER_ID", "").strip() or os.getenv("HOSTNAME", "").strip()
-    if container_id and container_id != hostname:
-        snapshot["container_id_hash"] = _hash_value(container_id)
-
+    # No hostname or container digests: unkeyed, they can be confirmed by guessing, and nothing
+    # reads them. A keyed per-install digest would identify no more than an install ID does.
     return snapshot
 
 
@@ -191,10 +203,16 @@ def build_trust_record(
     trust_label = map_label(trust_score, profile=profile)
     flags = trigger_flags(trust_score, volatility, drift, profile)
 
-    if response_hash is None and response_text:
-        response_hash = hash_response(response_text)
-
     salt = resolve_salt(config)
+    # A reply is hashed only under a key (the configured salt); without one, no hash is stored.
+    if response_hash is not None:
+        hash_scheme = HASH_SCHEME_CALLER
+    elif response_text and salt:
+        response_hash = keyed_response_hash(response_text, salt)
+        hash_scheme = HASH_SCHEME_KEYED
+    else:
+        hash_scheme = HASH_SCHEME_NONE
+
     pseudonymous_key = None
     if salt and user_id:
         pseudonymous_key = pseudonymous_user_key(user_id, salt)
@@ -231,6 +249,7 @@ def build_trust_record(
         trigger_flags=flags,
         response_hash=response_hash,
         pseudonymous_user_key=pseudonymous_key,
+        hash_scheme=hash_scheme,
     ).as_dict()
 
     sanitized = sanitize_record(record)
@@ -247,8 +266,10 @@ def append_trust_record(
     sanitized = sanitize_record(record)
     validate_trust_record(sanitized)
     path = _daily_log_path(base_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
+    # A new file is owner-only (0600) from creation, new directories 0700; existing files are
+    # appended to and keep their modes.
+    ensure_private_dir(path.parent)
+    with open_private_append(path) as handle:
         handle.write(_serialize(sanitized) + "\n")
     if config:
         if sqlite_logging_enabled(config):
@@ -266,7 +287,7 @@ def append_annotation(
     base_dir: str | Path = "logs/trust_overlay/annotations",
 ) -> Path:
     path = _daily_annotations_path(base_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
+    ensure_private_dir(path.parent)
+    with open_private_append(path) as handle:
         handle.write(_serialize(annotation) + "\n")
     return path

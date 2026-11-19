@@ -50,6 +50,30 @@ hallucination_risk = 0.00
 
 `policy_version` and `config_hash` are emitted in replay outputs. `config_hash` is computed via `lionlock.logging.event_log.config_hash_from` over the resolved gating + signals subset.
 
+### What decides a replayed decision
+
+Replay re-evaluates every event with the resolved policy and nothing else:
+
+- `LIONLOCK_GATING_ENABLED` is **ignored** by replay. It is a live-deployment switch applied when
+  `lionlock.config.load_config` loads a configuration for live use. Replay reads
+  `gating.enabled` from the policy, so the same `policy_version` and `config_hash` give the same
+  decisions in every shell. (Before 1.0.0b2 the variable overrode the policy: a policy with
+  `gating.enabled = true` replayed as `ALLOW` when the variable was `false`.)
+- A field the registry entry omits is taken from `lionlock.toml` in the working directory, or the
+  built-in default, read **without** the environment override, and it is part of `config_hash`.
+  State every `gating` and `signals` field in the entry if the policy must not depend on a local
+  file.
+- The resolved policy is validated with the same rules as `load_config` (thresholds finite with
+  `0 <= yellow < orange < red <= 1`, weights finite and `>= 0`, at least one enabled signal with
+  a weight above zero, known signal names, `hallucination_mode` `"warn_only"` or `"block"`,
+  `gating.enabled` a boolean). An invalid policy is a `policy error` and exit code `2`.
+- The policy's `signals.weights` and `signals.enabled` are passed to the gate, so they decide the
+  trigger and the `warn_only` hallucination check as well as the aggregate.
+- A stored score that is present but not a finite number (NaN, infinity, unparsable text) makes
+  that event an `invalid_signal_bundle`; it is never read as 0.0. An absent or `null` score still
+  reads as 0.0, for bundles from older schema versions. If the gate itself refuses an input, the
+  error propagates; replay never turns it into a decision.
+
 ## Labels (JSONL)
 
 Labels are external to production telemetry. Each JSONL line is keyed by `(session_id, turn_index, replay_id)`:

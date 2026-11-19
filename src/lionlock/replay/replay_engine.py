@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 from lionlock import config as lionlock_config
 from lionlock.core import gating as gating_module
 from lionlock.core.models import DerivedSignals, SignalBundle, SignalScores, canonical_gating_decision
+from lionlock.core.numeric import is_finite
 from lionlock.core.scoring import aggregate_score
 
 from .evaluation_labels import ALLOWED_DECISIONS, LabelRecord
@@ -25,8 +26,9 @@ class ReplayResult:
 def _safe_float(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)) and math.isfinite(float(value)):
-        return float(value)
+    if isinstance(value, (int, float)):
+        # is_finite: an int beyond the float range is unusable, not an OverflowError.
+        return float(value) if is_finite(value) else None
     try:
         parsed = float(value)
     except Exception:
@@ -34,6 +36,10 @@ def _safe_float(value: Any) -> float | None:
     if not math.isfinite(parsed):
         return None
     return parsed
+
+
+class _InvalidScore(ValueError):
+    pass
 
 
 def _round_score(value: float | None, digits: int) -> float | None:
@@ -66,7 +72,14 @@ def _parse_signal_bundle(raw: Any) -> SignalBundle | None:
         derived_signals = {}
 
     def _score(source: Dict[str, Any], key: str) -> float:
-        value = _safe_float(source.get(key))
+        stored = source.get(key)
+        value = _safe_float(stored)
+        if value is None and stored is not None:
+            # Present but not a finite number (NaN, inf, an unparsable string). Reading it as 0.0
+            # would lower the risk and could replay a broken record as ALLOW, which the gate itself
+            # refuses to do; report the bundle as invalid instead. An absent score (missing key or
+            # null, as in older schema versions) still reads as 0.0.
+            raise _InvalidScore(key)
         return float(value) if value is not None else 0.0
 
     missing_inputs = payload.get("missing_inputs", [])
@@ -76,20 +89,23 @@ def _parse_signal_bundle(raw: Any) -> SignalBundle | None:
         str(item) for item in missing_inputs if isinstance(item, (str, int, float))
     )
 
-    scores = SignalScores(
-        repetition_loopiness=_score(signal_scores, "repetition_loopiness"),
-        novelty_entropy_proxy=_score(signal_scores, "novelty_entropy_proxy"),
-        coherence_structure=_score(signal_scores, "coherence_structure"),
-        context_adherence=_score(signal_scores, "context_adherence"),
-        hallucination_risk=_score(signal_scores, "hallucination_risk"),
-    )
-    derived = DerivedSignals(
-        fatigue_risk_index=_score(derived_signals, "fatigue_risk_index"),
-        fatigue_risk_25t=_score(derived_signals, "fatigue_risk_25t"),
-        fatigue_risk_50t=_score(derived_signals, "fatigue_risk_50t"),
-        low_conf_halluc=_score(derived_signals, "low_conf_halluc"),
-        congestion_signature=_score(derived_signals, "congestion_signature"),
-    )
+    try:
+        scores = SignalScores(
+            repetition_loopiness=_score(signal_scores, "repetition_loopiness"),
+            novelty_entropy_proxy=_score(signal_scores, "novelty_entropy_proxy"),
+            coherence_structure=_score(signal_scores, "coherence_structure"),
+            context_adherence=_score(signal_scores, "context_adherence"),
+            hallucination_risk=_score(signal_scores, "hallucination_risk"),
+        )
+        derived = DerivedSignals(
+            fatigue_risk_index=_score(derived_signals, "fatigue_risk_index"),
+            fatigue_risk_25t=_score(derived_signals, "fatigue_risk_25t"),
+            fatigue_risk_50t=_score(derived_signals, "fatigue_risk_50t"),
+            low_conf_halluc=_score(derived_signals, "low_conf_halluc"),
+            congestion_signature=_score(derived_signals, "congestion_signature"),
+        )
+    except _InvalidScore:
+        return None
     schema_version = str(payload.get("signal_schema_version") or "unknown")
     return SignalBundle(
         signal_schema_version=schema_version,
@@ -106,9 +122,11 @@ def _evaluate_with_policy(bundle: SignalBundle, policy: PolicyBundle) -> Any:
     gating_enabled = True
     hallucination_mode = "warn_only"
     if isinstance(gating_cfg, dict):
+        # Only the recorded policy decides. LIONLOCK_GATING_ENABLED is a live-deployment switch
+        # applied by load_config; honouring it here made the same policy_version and config_hash
+        # replay as BLOCK in one shell and ALLOW in another.
         gating_enabled = bool(gating_cfg.get("enabled", True))
         hallucination_mode = str(gating_cfg.get("hallucination_mode") or "warn_only")
-    gating_enabled = lionlock_config.resolve_gating_enabled(policy.config)
     weights = signals_cfg.get("weights") if isinstance(signals_cfg, dict) else None
     enabled_signals = signals_cfg.get("enabled") if isinstance(signals_cfg, dict) else None
     if not isinstance(weights, dict):
@@ -125,6 +143,10 @@ def _evaluate_with_policy(bundle: SignalBundle, policy: PolicyBundle) -> Any:
         hallucination_mode=hallucination_mode,
         hard_gate_reasons_enabled=None,
         signal_bundle=bundle,
+        # The policy's own weights decide attribution as well as the aggregate. Without them the
+        # gate named the trigger by the default weights even when the policy had its own.
+        weights=weights,
+        enabled_signals=enabled_signals,
     )
 
 
@@ -166,6 +188,9 @@ def replay(
     *,
     round_digits: int = 6,
 ) -> ReplayResult:
+    lionlock_config.validate_policy_config(
+        policy.config, source=f"replay policy {policy.policy_version!r}"
+    )
     events_sorted = _dedupe_events(events)
     labels_present = labels is not None
     labels = labels or {}

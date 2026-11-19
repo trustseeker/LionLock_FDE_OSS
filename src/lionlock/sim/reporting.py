@@ -49,6 +49,9 @@ def render_markdown(report: Dict[str, Any]) -> str:
     decisions = report.get("decisions", {})
     missed = report.get("missed", {})
     coverage = report.get("coverage", {})
+    inputs = report.get("inputs", {})
+    if not isinstance(inputs, dict):
+        inputs = {}
     logging_cfg = report.get("logging", {})
     warnings = logging_cfg.get("warnings", []) if isinstance(logging_cfg, dict) else []
     lines = [
@@ -62,6 +65,11 @@ def render_markdown(report: Dict[str, Any]) -> str:
         f"- config_hash: {report.get('config_hash', '')}",
         f"- code_fingerprint: {report.get('code_fingerprint', '')}",
         f"- trust_logic_version: {report.get('trust_logic_version', '')}",
+        "",
+        "## Inputs",
+        f"- origin: {inputs.get('origin', '')}",
+        f"- produced_by_scorer: {inputs.get('produced_by_scorer', '')}",
+        f"- note: {inputs.get('note', '')}",
         "",
         "## Decision Distribution",
         f"- ALLOW: {decisions.get('ALLOW', 0)}",
@@ -81,10 +89,11 @@ def render_markdown(report: Dict[str, Any]) -> str:
         f"- offline_fallback_engaged: {logging_cfg.get('offline_fallback_engaged', False)}",
         f"- warnings: {warnings if warnings else '[]'}",
         "",
-        "## Coverage",
-        f"- fatigue_high: {coverage.get('fatigue_high', False)}",
-        f"- low_conf_halluc: {coverage.get('low_conf_halluc', False)}",
-        f"- congestion_high: {coverage.get('congestion_high', False)}",
+        "## Coverage (synthetic inputs fed to gating, not detection)",
+        f"- basis: {coverage.get('basis', '')}",
+        f"- fatigue_input_high: {coverage.get('fatigue_input_high', False)}",
+        f"- low_conf_halluc_input_high: {coverage.get('low_conf_halluc_input_high', False)}",
+        f"- congestion_input_high: {coverage.get('congestion_input_high', False)}",
         f"- expected_block: {coverage.get('expected_block', False)}",
         "",
         "## Determinism",

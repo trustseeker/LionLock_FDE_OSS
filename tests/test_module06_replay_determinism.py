@@ -69,7 +69,9 @@ def test_replay_deterministic_report(tmp_path) -> None:
         "signal_bundle": signal_bundle,
         "gating_decision": "REFRESH",
         "decision_risk_score": 0.5,
-        "trigger_signal": "hallucination_risk",
+        # LL-0002 (D1): with these weights the raw-channel trigger is the largest weighted
+        # contribution (repetition, 0.30 x 0.5), so a self-consistent recorded event names it.
+        "trigger_signal": "repetition_loopiness",
         "trust_logic_version": "TO-0.1.0",
         "policy_version": bundle.policy_version,
         "config_hash": bundle.config_hash,
