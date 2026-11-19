@@ -41,10 +41,24 @@ jobs:
             exit 1
           fi
 
+      # Reproducible build. scripts/reproducible_build.py builds the commit with SOURCE_DATE_EPOCH
+      # set to the commit time, a fixed umask and a normalised sdist, and the build backend is
+      # pinned exactly in pyproject.toml. A maintainer who checks out the same commit and runs the
+      # script gets files with the same sha256 as these (see the script for the one limit).
       - name: Build the sdist and wheel
         run: |
           python -m pip install --quiet build==1.6.1
-          python -m build
+          python scripts/reproducible_build.py dist
+
+      - name: Record the sha256 of each distribution file
+        run: |
+          {
+            echo "### sha256 of the built distributions (build job)"
+            echo
+            echo '```'
+            (cd dist && sha256sum -- *)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -52,8 +66,94 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  publish:
+  # Install and exercise the exact files that will be uploaded, in a fresh environment outside the
+  # checkout, before anything can reach PyPI. Read-only: no id-token, no secrets.
+  test-dist:
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The checkout supplies only .python-version and the smoke script; nothing is installed
+      # from it.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Record the sha256 of each distribution file
+        run: |
+          {
+            echo "### sha256 of the downloaded distributions (test job)"
+            echo
+            echo '```'
+            (cd dist && sha256sum -- *)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check there is one wheel and one sdist, both at the tag's version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          expected = os.environ["TAG"].removeprefix("v")
+          files = sorted(p.name for p in pathlib.Path("dist").iterdir())
+          wheels = [f for f in files if f.endswith(".whl")]
+          sdists = [f for f in files if f.endswith(".tar.gz")]
+          print("files:", files)
+          problems = []
+          if len(files) != 2 or len(wheels) != 1 or len(sdists) != 1:
+              problems.append("expected exactly one wheel and one sdist and nothing else")
+          if wheels and wheels[0].split("-")[1] != expected:
+              problems.append(f"wheel version is not {expected}: {wheels[0]}")
+          if sdists and sdists[0] != f"lionlock-{expected}.tar.gz":
+              problems.append(f"sdist is not lionlock-{expected}.tar.gz: {sdists[0]}")
+          for problem in problems:
+              print("::error::" + problem)
+          sys.exit(1 if problems else 0)
+          PY
+
+      - name: Create a fresh environment outside the checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --quiet twine==7.0.0
+
+      - name: twine check --strict
+        run: '"$RUNNER_TEMP/venv/bin/python" -m twine check --strict dist/*'
+
+      - name: Install the wheel
+        run: '"$RUNNER_TEMP/venv/bin/python" -m pip install dist/*.whl'
+
+      - name: pip check
+        run: '"$RUNNER_TEMP/venv/bin/python" -m pip check'
+
+      # Run from a scratch directory so the working directory cannot supply the package.
+      - name: Smoke test the installed wheel
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          smoke="$PWD/scripts/release_smoke.py"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" "$smoke" "${TAG#v}"
+          "$RUNNER_TEMP/venv/bin/lionlock-telemetry" --help
+          "$RUNNER_TEMP/venv/bin/lionlock-sim" --help
+          "$RUNNER_TEMP/venv/bin/python" -m lionlock.sample_data
+          "$RUNNER_TEMP/venv/bin/python" -c 'import importlib.metadata as m; print("lionlock", m.version("lionlock"))'
+
+  publish:
+    needs: [build, test-dist]
     runs-on: ubuntu-latest
     # The gate. This environment carries a required reviewer, so the run pauses here until a
     # maintainer approves it: nothing reaches PyPI unattended, even if a release is published by
@@ -72,3 +172,7 @@ jobs:
         # pypa/gh-action-pypi-publish v1.14.3, pinned by commit rather than tag: this is the one
         # step that runs with upload rights, and a tag can be moved to point at other code.
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
+        with:
+          # PEP 740 attestations. This action version supports the input (default true); it is
+          # stated here so that the behaviour is visible and not left to a default.
+          attestations: true

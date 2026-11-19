@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=82.0.1"]
+requires = ["setuptools==82.0.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "lionlock"
 version = "1.0.0b2"
-description = "Minimal open-source fatigue logging utilities for LionLock."
+description = "Deterministic, non-AI scoring and gating of LLM replies, with a hash-chained local audit log."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -50,6 +50,9 @@ lionlock-sim = "lionlock.sim.cli:main"
 lionlock-telemetry = "lionlock.telemetry.cli:main"
 [tool.setuptools]
 package-dir = { "" = "src" }
+
+[tool.setuptools.package-data]
+lionlock = ["py.typed", "sample_sessions.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
