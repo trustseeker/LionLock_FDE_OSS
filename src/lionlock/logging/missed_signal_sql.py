@@ -5,13 +5,9 @@ import math
 import sqlite3
 from typing import Any, Dict, Iterable, Tuple
 
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
 
 from lionlock.core.models import canonical_gating_decision
+from lionlock.utils.sql_optional import load_sqlalchemy
 
 from . import sql_init
 from .connection import validate_identifier
@@ -340,6 +336,7 @@ def record_missed_signal_event(
             if sqlite_path != ":memory:" and conn is not None:
                 conn.close()
 
+    create_engine, text = load_sqlalchemy()
     if create_engine is None or text is None:
         return False, "SQLAlchemy not installed; cannot insert non-sqlite URI."
     validate_identifier(schema, "schema")

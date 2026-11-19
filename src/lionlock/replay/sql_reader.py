@@ -5,13 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List
 
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
 
 from lionlock.logging.connection import validate_identifier
+from lionlock.utils.sql_optional import load_sqlalchemy
 
 
 EVENT_COLUMNS = (
@@ -159,6 +155,7 @@ def read_events(
             except Exception:
                 pass
 
+    create_engine, text = load_sqlalchemy()
     if create_engine is None or text is None:
         raise ReadError("SQLAlchemy not installed; cannot read non-sqlite URI.")
 

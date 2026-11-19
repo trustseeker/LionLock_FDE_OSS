@@ -45,6 +45,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, NamedTuple, Sequence, Set
 
+from lionlock.utils.sql_optional import loaded_sqlalchemy_exc
+
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MAX_RETRIES = 5
@@ -104,15 +106,10 @@ class _Attempt:
     in_doubt: bool = False
 
 
-def _load_sqlalchemy_exc() -> Any:
-    try:
-        from sqlalchemy import exc
-    except Exception:
-        return None
-    return exc
-
-
-_SA_EXC: Any = _load_sqlalchemy_exc()
+def _sa_exc() -> Any:
+    """``sqlalchemy.exc`` when SQLAlchemy is loaded, else None. An exception SQLAlchemy raised
+    implies the package is loaded, so classifying errors never has to import it."""
+    return loaded_sqlalchemy_exc()
 
 
 def _driver_error(exc: BaseException) -> BaseException:
@@ -138,8 +135,9 @@ def _is_sqlite_busy(exc: BaseException) -> bool:
 
 
 def _is_integrity_error(exc: BaseException) -> bool:
+    sa_exc = _sa_exc()
     return isinstance(_driver_error(exc), sqlite3.IntegrityError) or (
-        _SA_EXC is not None and isinstance(exc, _SA_EXC.IntegrityError)
+        sa_exc is not None and isinstance(exc, sa_exc.IntegrityError)
     )
 
 
@@ -147,17 +145,18 @@ def is_transient_error(exc: BaseException) -> bool:
     """True when retrying may succeed: lock contention or a lost connection."""
     if isinstance(exc, sqlite3.Error):
         return _is_sqlite_busy(exc)
-    if _SA_EXC is None:
+    sa_exc = _sa_exc()
+    if sa_exc is None:
         return False
-    if isinstance(exc, (_SA_EXC.TimeoutError, _SA_EXC.DisconnectionError)):
+    if isinstance(exc, (sa_exc.TimeoutError, sa_exc.DisconnectionError)):
         return True
-    if not isinstance(exc, _SA_EXC.DBAPIError):
+    if not isinstance(exc, sa_exc.DBAPIError):
         return False
     if exc.connection_invalidated:
         return True
     if isinstance(exc.orig, sqlite3.Error):
         return _is_sqlite_busy(exc.orig)
-    return isinstance(exc, _SA_EXC.OperationalError)
+    return isinstance(exc, sa_exc.OperationalError)
 
 
 def is_duplicate_error(exc: BaseException) -> bool:

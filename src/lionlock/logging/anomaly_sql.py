@@ -4,16 +4,12 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
 
 from .connection import validate_identifier
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD, prepare_event_for_sql
 from .privacy import FORBIDDEN_PAYLOAD_KEYS, scrub_forbidden_keys
 from lionlock.core.models import canonical_gating_decision
+from lionlock.utils.sql_optional import load_sqlalchemy
 
 ANOMALY_COLUMNS: List[Tuple[str, str]] = [
     ("anomaly_pk", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -105,6 +101,7 @@ def _sqlite_table_exists(db_path: str, table: str) -> bool:
 
 
 def _postgres_table_columns(uri: str, table: str, schema: str = "public") -> set[str] | None:
+    create_engine, text = load_sqlalchemy()
     if create_engine is None or text is None:
         return None
     engine = None
@@ -353,6 +350,7 @@ def init_db(uri: str, anomalies_table: str, diagnostics_table: str) -> Tuple[boo
                 conn.execute(_create_table_sql(diagnostics_table, DIAGNOSTICS_COLUMNS))
                 conn.commit()
             return True, "Initialized anomaly sqlite tables."
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot init anomaly DB."
         engine = create_engine(uri)
@@ -569,6 +567,7 @@ def record_anomalies(
             if duplicate:
                 return True, "Duplicate anomalies ignored."
             return True, "Anomaly records written."
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot write anomaly DB."
         engine = create_engine(uri)
