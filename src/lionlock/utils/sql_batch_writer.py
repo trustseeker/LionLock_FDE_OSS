@@ -61,6 +61,9 @@ _SQLITE_CONSTRAINT_PRIMARYKEY = 1555
 _SQLITE_CONSTRAINT_UNIQUE = 2067
 # PostgreSQL SQLSTATEs: unique_violation, and class 40 (transaction rollback).
 _PG_UNIQUE_VIOLATION = "23505"
+# MySQL and MariaDB ER_DUP_ENTRY. SQLSTATE 23000 is shared by every integrity violation
+# (foreign key, NOT NULL, ...), so only this error number identifies a duplicate.
+_MYSQL_DUP_ENTRY = 1062
 _PG_TRANSACTION_ROLLBACK_CLASS = "40"
 
 _QUOTE = re.compile(r"[\"'`]")
@@ -124,6 +127,18 @@ def _sqlstate(driver_exc: BaseException) -> str | None:
     return sqlstate if isinstance(sqlstate, str) and sqlstate else None
 
 
+def _mysql_errno(driver_exc: BaseException) -> int | None:
+    """MySQL error number of a PyMySQL or mysqlclient (MySQLdb) error.
+
+    Both raise ``Error(errno, message)``, so the number is ``args[0]``. PostgreSQL and SQLite
+    drivers put a string there, or nothing, so an integer identifies the MySQL family.
+    """
+    args = getattr(driver_exc, "args", None)
+    if args and isinstance(args[0], int) and not isinstance(args[0], bool):
+        return args[0]
+    return None
+
+
 def _is_sqlite_busy(exc: BaseException) -> bool:
     if not isinstance(exc, sqlite3.OperationalError):
         return False
@@ -167,6 +182,10 @@ def is_duplicate_error(exc: BaseException) -> bool:
     code = getattr(driver_exc, "sqlite_errorcode", None)  # Python 3.11+
     if isinstance(code, int):
         return code in (_SQLITE_CONSTRAINT_UNIQUE, _SQLITE_CONSTRAINT_PRIMARYKEY)
+    mysql_errno = _mysql_errno(driver_exc)
+    if mysql_errno is not None:
+        # Checked before SQLSTATE: PyMySQL also sets ``sqlstate`` (23000) on these errors.
+        return mysql_errno == _MYSQL_DUP_ENTRY
     sqlstate = _sqlstate(driver_exc)
     if sqlstate is not None:
         return sqlstate == _PG_UNIQUE_VIOLATION
