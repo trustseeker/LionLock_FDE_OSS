@@ -85,6 +85,10 @@ def _number(value: Any) -> int | float:
         raise _Invalid("number_type", "Input should be a valid number")
     if type(value) is int:
         return value
+    # float() also parses buffers such as memoryview(b"1"); a number must offer __float__ or
+    # __index__, as pydantic's strict float requires (Decimal and Fraction do).
+    if not (hasattr(value, "__float__") or hasattr(value, "__index__")):
+        raise _Invalid("number_type", "Input should be a valid number")
     try:
         return float(value)
     except OverflowError:
@@ -155,7 +159,8 @@ class SignalMetadata:
     @classmethod
     def _validate(cls, raw: Any, errors: list[dict[str, Any]]) -> "SignalMetadata | None":
         if isinstance(raw, SignalMetadata):
-            return raw
+            # Dataclass construction checks nothing, so an instance gets the dictionary rules too.
+            raw = {key: getattr(raw, key) for key in METADATA_FIELDS}
         if not isinstance(raw, dict):
             errors.append(
                 _error(("metadata",), _Invalid("model_type", "Input should be a dictionary"))
@@ -201,7 +206,11 @@ class SignalPayload:
     @classmethod
     def model_validate(cls, payload: Any) -> "SignalPayload":
         if isinstance(payload, SignalPayload):
-            return payload
+            # Dataclass construction checks nothing, so an instance gets the dictionary rules too.
+            as_dict: dict[str, Any] = {"prompt": payload.prompt, "response": payload.response}
+            if payload.metadata is not None:
+                as_dict["metadata"] = payload.metadata
+            payload = as_dict
         if not isinstance(payload, dict):
             raise ValidationError(
                 [_error((), _Invalid("model_type", "Input should be a dictionary"))]

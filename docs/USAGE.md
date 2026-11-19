@@ -40,8 +40,10 @@ lionlock-sim run --db sqlite:///sim_out/lionlock_sim.db --out-dir sim_out
   fingerprint; rerunning replaces that run's rows. `--append-run` writes under `<id>-<n>` instead,
   where `n` is one more than the highest already in the database, so the same database gives the
   same id. Run append writers one at a time.
-- `--policy` is looked up in `--policy-registry`, else `policies.toml` in the working directory;
-  only a missing file or entry falls back to the built-in baseline. An invalid entry is an error.
+- `--policy` is looked up in `--policy-registry`, else `policies.toml` in the working directory.
+  Only the implicit `policies.toml` lookup falls back to the built-in baseline, and only when the
+  file or the entry is missing. With `--policy-registry`, a missing file or entry is an error. An
+  invalid or malformed entry is always an error.
 
 ## Tests and Checks
 - Run pytest (or `python -m unittest discover -s tests` if pytest is unavailable): `pytest -q`

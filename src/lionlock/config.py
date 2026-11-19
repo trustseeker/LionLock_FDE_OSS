@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Mapping
 
 from lionlock.core.scoring import DEFAULT_SIGNAL_WEIGHTS
 from lionlock.logging.connection import build_postgres_dsn
+
 try:
     import tomllib  # py>=3.11
 except ModuleNotFoundError:  # pragma: no cover - fallback for older runtimes
@@ -336,7 +337,9 @@ def validate_policy_config(config: Mapping[str, Any], *, source: str = "config")
         raise ValueError(f"invalid {source}: " + "; ".join(problems))
 
 
-def load_config(path: str = "lionlock.toml", *, env_gating_override: bool = True) -> Dict[str, Any]:
+def load_config(
+    path: str = "lionlock.toml", *, env_gating_override: bool = True, validate: bool = True
+) -> Dict[str, Any]:
     """Load config with safe defaults; missing files are non-fatal, invalid settings are not.
 
     ``LIONLOCK_GATING_ENABLED`` overrides ``gating.enabled`` for live use. Pass
@@ -355,16 +358,18 @@ def load_config(path: str = "lionlock.toml", *, env_gating_override: bool = True
             raise ValueError(f"cannot load {config_path}: {exc}") from exc
         config = _merge_dict(config, raw)
 
-    validate_policy_config(config, source=f"config {config_path}")
+    if validate:  # resolve_policy validates the merged policy instead (TOML errors stay fatal)
+        validate_policy_config(config, source=f"config {config_path}")
     config.setdefault("gating", {})
     if env_gating_override:
         config["gating"]["enabled"] = resolve_gating_enabled(config)
 
     logging_cfg = config.get("logging", {})
     sql_cfg = config.get("logging_sql", {})
-    env_token = os.getenv("LIONLOCK_TELEMETRY_TOKEN", "").strip() or os.getenv(
-        "LIONLOCK_SQL_TOKEN", ""
-    ).strip()
+    env_token = (
+        os.getenv("LIONLOCK_TELEMETRY_TOKEN", "").strip()
+        or os.getenv("LIONLOCK_SQL_TOKEN", "").strip()
+    )
     if env_token:
         sql_cfg["token"] = env_token
     # The SQL sink is opt-in: the environment may say where the database is, never whether to use

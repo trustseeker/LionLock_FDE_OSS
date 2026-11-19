@@ -77,10 +77,19 @@ def load_policy_registry(path: str | Path) -> Dict[str, Dict[str, Any]]:
     if not isinstance(raw, dict):
         raise ValueError("Policy registry must be a TOML table.")
     policies = raw.get("policies")
+    explicit = policies is not None
     if policies is None:
         policies = raw
     if not isinstance(policies, dict):
         raise ValueError("Policy registry must define a policies table.")
+    if explicit:
+        # Inside [policies] every entry must be a table. Dropping a malformed one would make it
+        # look absent, and the simulator treats an absent entry as "use the baseline".
+        malformed = sorted(
+            str(key) for key, value in policies.items() if not isinstance(value, dict)
+        )
+        if malformed:
+            raise ValueError(f"Policy registry entries must be tables: {', '.join(malformed)}")
     return {str(key): value for key, value in policies.items() if isinstance(value, dict)}
 
 
@@ -99,7 +108,9 @@ def resolve_policy(
     if base_config is None:
         # Without the LIONLOCK_GATING_ENABLED override: a policy that leaves gating.enabled to the
         # base config must still resolve to the same settings, and config_hash, in every shell.
-        base_config = lionlock_config.load_config(env_gating_override=False)
+        # Validated below as part of the merged policy, so a bad local value fails only when the
+        # entry leaves that field to the local file.
+        base_config = lionlock_config.load_config(env_gating_override=False, validate=False)
     base_subset = _policy_subset(base_config)
     entry_subset = _policy_subset(entry)
     resolved = _merge_dict(base_subset, entry_subset)
