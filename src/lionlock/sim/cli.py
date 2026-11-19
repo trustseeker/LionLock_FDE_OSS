@@ -10,8 +10,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lionlock-sim",
         description=(
-            "LionLock Module 07 simulation harness (Postgres-first; sqlite only by "
-            "explicit opt-in or offline fallback)."
+            "LionLock Module 07 simulation harness. Feeds synthetic, hand-built signal bundles "
+            "(not produced by the scorer) through the gating policy and records the decisions. "
+            "It exercises gating, logging and replay; it does not test or calibrate detection. "
+            "The database is never chosen for you and the network is never probed: pass --db "
+            "or set LIONLOCK_DB_URL."
         ),
     )
     subparsers = parser.add_subparsers(dest="command")
@@ -26,7 +29,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--db",
-        help="SQL URI/DSN for telemetry (writes). Postgres is default; sqlite is opt-in.",
+        help=(
+            "Required unless LIONLOCK_DB_URL is set. SQL URI/DSN the run writes to: "
+            f"{runner.SUGGESTED_SQLITE_URI} for a local file (no network), or a postgresql:// "
+            "DSN. There is no default database and no automatic fallback."
+        ),
     )
     run_parser.add_argument("--schema", help="Postgres schema or sqlite schema name.")
     run_parser.add_argument("--policy", default="dev-local", help="Policy version identifier.")
@@ -34,7 +41,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--append-run",
         action="store_true",
-        help="Always create a new run_id (no idempotent wipe).",
+        help=(
+            "Write under a new run_id, <base>-<n>, where n is one more than the highest already "
+            "in the database (no idempotent wipe). Deterministic for a given database; run "
+            "append writers one at a time."
+        ),
     )
     return parser
 

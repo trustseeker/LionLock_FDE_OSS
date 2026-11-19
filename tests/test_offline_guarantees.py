@@ -16,6 +16,7 @@ DETERMINISTIC_MODULES = [
     "core/__init__.py",
     "core/gating.py",
     "core/models.py",
+    "core/numeric.py",
     "core/scoring.py",
     "signal_schemas.py",
     "trust_overlay/config.py",

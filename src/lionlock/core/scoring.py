@@ -1,12 +1,12 @@
 import math
 import logging
 import re
-from statistics import pstdev
 from typing import Dict
 
 from lionlock.signal_schemas import SignalPayload, ValidationError
 
 from .models import DerivedSignals, SignalBundle, SignalScores
+from .numeric import is_finite, pstdev
 
 LOGGER = logging.getLogger(__name__)
 
@@ -88,7 +88,9 @@ def _get_unit_interval(
     value = metadata.get(key) if metadata else None
     if isinstance(value, bool):
         value = None
-    if isinstance(value, (int, float)) and math.isfinite(value):
+    # is_finite, not math.isfinite: an int beyond the float range (10**400) counts as non-finite
+    # and so as missing, where math.isfinite raised OverflowError out of scoring.
+    if isinstance(value, (int, float)) and is_finite(value):
         return _clamp(float(value))
     _append_missing(missing_inputs, key)
     return 0.0
@@ -98,7 +100,7 @@ def _get_turn_index(metadata: dict | None, *, missing_inputs: list[str]) -> int:
     value = metadata.get("turn_index") if metadata else None
     if isinstance(value, bool):
         value = None
-    if isinstance(value, (int, float)) and math.isfinite(value):
+    if isinstance(value, (int, float)) and is_finite(value):
         return max(0, int(value))
     _append_missing(missing_inputs, "turn_index")
     return 0
@@ -108,7 +110,7 @@ def _get_duration_ms(metadata: dict | None, *, missing_inputs: list[str]) -> flo
     value = metadata.get("duration_ms") if metadata else None
     if isinstance(value, bool):
         value = None
-    if isinstance(value, (int, float)) and math.isfinite(value):
+    if isinstance(value, (int, float)) and is_finite(value):
         return max(0.0, float(value))
     _append_missing(missing_inputs, "duration_ms")
     return 0.0
@@ -128,7 +130,7 @@ def _get_latency_window(
         for item in value
         if isinstance(item, (int, float))
         and not isinstance(item, bool)
-        and math.isfinite(item)
+        and is_finite(item)
         and float(item) >= 0.0
     ]
     if not filtered:
