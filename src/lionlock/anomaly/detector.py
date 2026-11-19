@@ -4,11 +4,11 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from statistics import pstdev
 from typing import Any, Dict, Iterable, List, Tuple
 
 from lionlock.core.gating import severity_band
 from lionlock.core.models import canonical_gating_decision
+from lionlock.core.numeric import is_finite, pstdev
 from lionlock.trust_overlay.config import resolve_trust_logic_version
 from lionlock.trust_overlay.versioning import code_fingerprint
 
@@ -82,7 +82,7 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
 def _safe_float(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)) and math.isfinite(value):
+    if isinstance(value, (int, float)) and is_finite(value):
         return float(value)
     return None
 
@@ -90,7 +90,7 @@ def _safe_float(value: Any) -> float | None:
 def _safe_int(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)) and math.isfinite(value):
+    if isinstance(value, (int, float)) and is_finite(value):
         return max(0, int(value))
     return None
 
@@ -166,7 +166,7 @@ def _latency_jitter_score(latencies: Iterable[Any]) -> float | None:
         for item in latencies
         if isinstance(item, (int, float))
         and not isinstance(item, bool)
-        and math.isfinite(item)
+        and is_finite(item)
         and float(item) >= 0.0
     ]
     if len(values) < 2:

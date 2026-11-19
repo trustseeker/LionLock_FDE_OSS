@@ -1,6 +1,14 @@
 [gating]
 # Default behavior: enforce gating decisions.
 enabled = true
+# Optional; defaults shown. Gating and signal settings are checked when this file is loaded, and an
+# invalid value stops startup with an error naming the key, the value and the rule instead of
+# falling back silently: thresholds satisfy 0 <= yellow < orange < red <= 1, hallucination_mode is
+# "warn_only" or "block", [signals] weights are finite and >= 0, [signals] enabled lists known
+# signal names, and at least one enabled signal has a weight above zero. TOML's nan and inf are
+# rejected everywhere.
+# hallucination_mode = "warn_only"
+# thresholds = { yellow = 0.45, orange = 0.65, red = 0.80 }
 
 [logging]
 # Default OSS logging surface is a single local SQLite file. It never leaves this machine
@@ -37,7 +45,7 @@ uri = ""
 # stop_timeout_s = 2.0
 
 # Environment overrides:
-#   LIONLOCK_GATING_ENABLED=true|false     overrides [gating].enabled
+#   LIONLOCK_GATING_ENABLED=true|false     overrides [gating].enabled (live use; replay ignores it)
 #   LIONLOCK_TELEMETRY_UPLOAD=on|off       overrides [telemetry_upload].enabled
 #   LIONLOCK_TELEMETRY_ENDPOINT=https://…  overrides [telemetry_upload].endpoint
 #   DO_NOT_TRACK=1                          disables uploads regardless of any other setting

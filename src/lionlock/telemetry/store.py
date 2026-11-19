@@ -2,7 +2,9 @@
 
 One file (default ``logs/lionlock.db``) holds the public signal events and Trust Overlay records
 written by this install. Rows are append-only and hash-chained per table, so an edit, reorder, or
-deletion inside the retained window is detected by ``LogStore.verify()``.
+deletion inside the retained window is detected by ``LogStore.verify()``. Rows removed from either
+end, and a history rewritten with fresh hashes, are detected for certain only against a head
+(``LogStore.head()``) recorded somewhere the log's writer cannot change; see ``verify``.
 
 This file never leaves the machine. ``lionlock.telemetry.export`` builds uploads from it by
 copying an allowlisted, re-keyed subset into a separate snapshot file.
@@ -130,12 +132,35 @@ class Identity:
 
 
 @dataclass(frozen=True)
+class TableHead:
+    """The end of one table's chain: rows retained, the last ``seq`` and the last ``row_hash``.
+
+    Unpacks as ``count, last_seq, last_hash = head``. An empty table that was never written has
+    head ``(0, 0, GENESIS_HASH)``. Record a head somewhere the log's writer cannot change and
+    pass it back to ``LogStore.verify`` later.
+    """
+
+    count: int | None  # None only in an expected head whose count was not recorded
+    last_seq: int
+    last_hash: str
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter((self.count, self.last_seq, self.last_hash))
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"count": self.count, "last_seq": self.last_seq, "last_hash": self.last_hash}
+
+
+@dataclass(frozen=True)
 class ChainStatus:
     table: str
     ok: bool
     rows_checked: int
     first_bad_seq: int | None = None
     reason: str | None = None
+    head: TableHead | None = None
+    # Rows 1..pruned_through were removed by the store's own pruning (0: nothing pruned).
+    pruned_through: int = 0
 
 
 def _text(value: Any, max_len: int) -> str | None:
@@ -247,6 +272,89 @@ def _ensure_identity(conn: sqlite3.Connection) -> Identity:
     return Identity(install_id=meta["install_id"], export_key=meta["export_key"])
 
 
+def _sequence_counter(conn: sqlite3.Connection, table: str) -> int:
+    """The highest seq SQLite ever handed out for ``table`` (0 if none). Deleting rows does not
+    lower it, so it still shows rows removed from the end."""
+    try:
+        row = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = ?", (table,)).fetchone()
+    except sqlite3.OperationalError:  # no AUTOINCREMENT table has ever been written
+        return 0
+    if row is None or row[0] is None:
+        return 0
+    value = _parse_row_number(row[0])
+    if value is None:
+        raise _MalformedMetadata(f"sqlite_sequence for {table} is not a row number: {row[0]!r}")
+    return value
+
+
+class _MalformedMetadata(Exception):
+    """Integrity metadata the store cannot parse; verify() reports it as a failed check."""
+
+
+def _parse_row_number(value: Any) -> int | None:
+    """A non-negative row number from SQLite or the meta table, or None if it is not one.
+
+    ``str.isdigit`` alone accepts characters such as '²' that ``int`` rejects, so parse strictly.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    # SQLite row numbers fit in 64 bits (at most 19 digits). Longer strings are not row numbers,
+    # and int() refuses very long ones (Python's integer string limit) with ValueError.
+    if isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 19:
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _anchor(conn: sqlite3.Connection, table: str) -> Tuple[str | None, str | None]:
+    meta = _get_meta(conn, (f"anchor:{table}", f"anchor_seq:{table}"))
+    return meta.get(f"anchor:{table}"), meta.get(f"anchor_seq:{table}")
+
+
+def _table_head(conn: sqlite3.Connection, table: str) -> TableHead:
+    _check_table(table)
+    count = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    row = conn.execute(f"SELECT seq, row_hash FROM {table} ORDER BY seq DESC LIMIT 1").fetchone()
+    if row is not None:
+        return TableHead(count, int(row[0]), str(row[1]))
+    anchor_hash, anchor_seq = _anchor(conn, table)
+    parsed = _parse_row_number(anchor_seq) if anchor_seq is not None else None
+    if anchor_hash is not None and parsed is not None:
+        return TableHead(0, parsed, anchor_hash)
+    return TableHead(0, 0, GENESIS_HASH)
+
+
+def as_table_head(value: Any) -> TableHead:
+    """A ``TableHead`` from a tuple ``(count, last_seq, last_hash)`` or a mapping with those keys.
+
+    ``count`` may be ``None`` (unknown). Raises ``ValueError`` for anything malformed.
+    """
+    if isinstance(value, TableHead):
+        value = tuple(value)
+    elif isinstance(value, Mapping):
+        value = (value.get("count"), value.get("last_seq"), value.get("last_hash"))
+    if not isinstance(value, (tuple, list)) or len(value) != 3:
+        raise ValueError("a head is (count, last_seq, last_hash)")
+    count, last_seq, last_hash = value
+    if count is not None and (isinstance(count, bool) or not isinstance(count, int) or count < 0):
+        raise ValueError("head count must be a non-negative integer or null")
+    if isinstance(last_seq, bool) or not isinstance(last_seq, int) or last_seq < 0:
+        raise ValueError("head last_seq must be a non-negative integer")
+    if (
+        not isinstance(last_hash, str)
+        or len(last_hash) != 64
+        or any(char not in "0123456789abcdef" for char in last_hash)
+    ):
+        raise ValueError("head last_hash must be 64 lowercase hex characters")
+    if count is not None and count > last_seq:
+        raise ValueError("head count cannot exceed last_seq")
+    return TableHead(count, last_seq, last_hash)
+
+
 def _read_rows(
     conn: sqlite3.Connection, table: str, after_seq: int, limit: int
 ) -> List[Dict[str, Any]]:
@@ -312,10 +420,38 @@ class LogStore:
                 for table in LOG_TABLES
             }
 
-    def verify(self) -> Dict[str, ChainStatus]:
-        """Re-hash every retained row and check each link back to the chain anchor."""
+    def head(self, table: str) -> TableHead:
+        """``(count, last_seq, last_hash)`` of one table, read in one transaction."""
         with self._read() as conn:
-            return {table: self._verify_table(conn, table) for table in LOG_TABLES}
+            return _table_head(conn, table)
+
+    def heads(self) -> Dict[str, TableHead]:
+        """``head()`` of every table, read in one transaction."""
+        with self._read() as conn:
+            return {table: _table_head(conn, table) for table in LOG_TABLES}
+
+    def verify(self, expected_head: Mapping[str, Any] | None = None) -> Dict[str, ChainStatus]:
+        """Re-hash every retained row and check the chain's structure.
+
+        Each table must run without gaps from its prune anchor (or seq 1) to a last row equal to
+        SQLite's sequence counter; every row must link to the one before it and match its hash.
+        ``pruned_through`` reports rows the store's own pruning removed.
+
+        These checks catch deletions made with plain SQL, but someone who can write the file can
+        also rewrite the anchor, the counter and every hash. Only a head recorded somewhere the
+        writer cannot change detects that: pass ``expected_head={table: head}`` (a ``TableHead``,
+        a ``(count, last_seq, last_hash)`` tuple, or a mapping with those keys). Its row must still
+        be in the chain with the same hash, or be the prune anchor itself; a head that pruning has
+        since removed can no longer be confirmed and fails.
+        """
+        expected: Dict[str, TableHead] = {}
+        for table, value in (expected_head or {}).items():
+            _check_table(table)
+            expected[table] = as_table_head(value)
+        with self._read() as conn:
+            return {
+                table: self._verify_table(conn, table, expected.get(table)) for table in LOG_TABLES
+            }
 
     def identity(self) -> Identity:
         """Return this install's export identity, creating it on first use."""
@@ -391,28 +527,122 @@ class LogStore:
         _set_meta(conn, f"anchor_seq:{table}", str(cutoff_seq))
         return int(deleted)
 
-    def _verify_table(self, conn: sqlite3.Connection, table: str) -> ChainStatus:
+    def _verify_table(
+        self, conn: sqlite3.Connection, table: str, expected: TableHead | None = None
+    ) -> ChainStatus:
         columns = HASHED_COLUMNS[table]
-        expected_prev = _get_meta(conn, (f"anchor:{table}",)).get(f"anchor:{table}", GENESIS_HASH)
+        head = _table_head(conn, table)
+        anchor_hash, anchor_seq_text = _anchor(conn, table)
+        anchor_seq = 0
         checked = 0
+
+        def fail(seq: int | None, reason: str) -> ChainStatus:
+            return ChainStatus(table, False, checked, seq, reason, head, anchor_seq)
+
+        # Only _prune writes the anchor, and it always writes both keys together.
+        if (anchor_hash is None) != (anchor_seq_text is None):
+            return fail(None, "prune anchor is incomplete (anchor hash and anchor_seq disagree)")
+        if anchor_seq_text is not None:
+            parsed_anchor = _parse_row_number(anchor_seq_text)
+            if parsed_anchor is None or parsed_anchor < 1:
+                return fail(None, "prune anchor_seq is not a positive row number")
+            anchor_seq = parsed_anchor
+        expected_prev = anchor_hash if anchor_hash is not None else GENESIS_HASH
+        expected_seq = anchor_seq + 1
+        hash_at_expected_head: str | None = None
         cursor = conn.execute(
             f"SELECT seq, {','.join(columns)}, prev_hash, row_hash FROM {table} ORDER BY seq"
         )
         for row in cursor:
             seq = int(row[0])
+            if seq != expected_seq:
+                if checked:
+                    return fail(seq, f"rows {expected_seq}..{seq - 1} are missing")
+                if anchor_hash is None:
+                    return fail(
+                        seq,
+                        f"rows {expected_seq}..{seq - 1} are missing before the first row "
+                        "and no prune anchor accounts for them",
+                    )
+                return fail(
+                    seq,
+                    f"the first row is seq {seq} but the prune anchor ends at seq {anchor_seq}",
+                )
             payload = dict(zip(columns, row[1 : 1 + len(columns)]))
             prev_hash, row_hash = row[-2], row[-1]
             if prev_hash != expected_prev:
-                return ChainStatus(table, False, checked, seq, "prev_hash does not link")
+                return fail(seq, "prev_hash does not link")
             try:
                 recomputed = chain_hash(str(prev_hash), payload)
             except (TypeError, ValueError):
-                return ChainStatus(table, False, checked, seq, "row holds non-canonical values")
+                return fail(seq, "row holds non-canonical values")
             if recomputed != row_hash:
-                return ChainStatus(table, False, checked, seq, "row_hash does not match row")
+                return fail(seq, "row_hash does not match row")
+            if expected is not None and seq == expected.last_seq:
+                hash_at_expected_head = str(row_hash)
             expected_prev = row_hash
+            expected_seq += 1
             checked += 1
-        return ChainStatus(table, True, checked)
+
+        last_seq = expected_seq - 1
+        if anchor_hash is not None and not checked:
+            return fail(None, f"no rows remain after the prune anchor (seq {anchor_seq})")
+        try:
+            counter = _sequence_counter(conn, table)
+        except _MalformedMetadata as exc:
+            return fail(None, str(exc))
+        if counter > last_seq:
+            return fail(
+                last_seq + 1,
+                f"rows {last_seq + 1}..{counter} were deleted from the end "
+                f"(the table's sequence counter is at {counter})",
+            )
+        if counter < last_seq:
+            return fail(None, f"the table's sequence counter ({counter}) is behind seq {last_seq}")
+        if expected is not None:
+            reason = self._check_expected_head(
+                expected, last_seq, anchor_hash, anchor_seq, hash_at_expected_head
+            )
+            if reason is not None:
+                return fail(expected.last_seq or None, reason)
+        return ChainStatus(table, True, checked, head=head, pruned_through=anchor_seq)
+
+    @staticmethod
+    def _check_expected_head(
+        expected: TableHead,
+        last_seq: int,
+        anchor_hash: str | None,
+        anchor_seq: int,
+        hash_at_expected_head: str | None,
+    ) -> str | None:
+        """Why the verified chain does not continue the recorded head, or None if it does."""
+        if expected.last_seq == 0:
+            return None  # recorded while the table was empty; every chain continues from there
+        if expected.count is not None and anchor_seq < expected.last_seq - expected.count:
+            return (
+                f"the recorded head had pruned through seq {expected.last_seq - expected.count}, "
+                f"but rows from seq {anchor_seq + 1} are present again: history was rewritten"
+            )
+        if expected.last_seq > last_seq:
+            return (
+                f"the recorded head is seq {expected.last_seq} but the last row is seq "
+                f"{last_seq}: rows were removed from the end (truncated)"
+            )
+        if expected.last_seq == anchor_seq:
+            if anchor_hash != expected.last_hash:
+                return "the prune anchor does not match the recorded head: history was rewritten"
+            return None
+        if expected.last_seq < anchor_seq:
+            return (
+                f"the recorded head (seq {expected.last_seq}) has since been pruned (rows up to "
+                f"seq {anchor_seq} are gone), so it can no longer be confirmed; record heads "
+                "more often than every logging.sqlite_max_rows rows"
+            )
+        if hash_at_expected_head != expected.last_hash:
+            return (
+                f"row {expected.last_seq} does not match the recorded head: history was rewritten"
+            )
+        return None
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

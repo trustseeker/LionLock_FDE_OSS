@@ -7,17 +7,29 @@ delivery policy so both sinks give the same guarantees:
 * Every accepted event ends in exactly one terminal counter of ``stats()``:
   ``written``; ``duplicates`` (rejected by a UNIQUE or PRIMARY KEY constraint,
   i.e. already stored); ``failed`` (a write was attempted but the row could not
-  be persisted); ``in_doubt`` (the COMMIT failed without a known outcome, so the
-  row may or may not be stored); or ``dropped`` (never attempted: evicted from a
-  full queue, or still queued when the stop deadline expired). Until then it is
-  ``pending``.
+  be persisted); ``in_doubt`` (a COMMIT failed without a known outcome and the
+  retries ran out before it could be resolved, so the row may or may not be
+  stored); or ``dropped`` (never attempted: evicted from a full queue, or still
+  queued when the stop deadline expired). Until then it is ``pending``.
+* Every accepted event gets an idempotency key, ``(writer_id, writer_seq)``: the
+  writer's id, which the database assigns when the writer starts, and the next
+  number of the writer's own counter. Each sink table has a UNIQUE index on the
+  key, so the database itself refuses to store an event twice. No randomness is
+  involved.
 * Transient errors (lock contention, lost connections) are retried with
   deterministic exponential backoff. Write errors never disable the writer.
-* A write is replayed only when it is known to have stored nothing. A COMMIT that
-  fails without a known outcome is never retried, so no row is stored twice.
+* A COMMIT that fails without a known outcome is retried too, but first the
+  writer looks up which of the batch's keys are already stored: those events are
+  counted as ``written`` (and ``reconciled``), and only the others are inserted
+  again.
 * A non-transient batch error, such as a single UNIQUE violation, rolls the
   batch back; its rows are then inserted one by one so only the offending rows
   are skipped (duplicates) or failed.
+* A UNIQUE violation is counted as a duplicate only after the writer has looked
+  up the event's own key and found it not stored, so another UNIQUE constraint
+  refused the row. If the key itself is stored, another writer holds this
+  writer's id: the event was not stored, so it is counted as ``failed`` (and
+  ``key_collisions``) and logged as an error, never as a duplicate.
 * ``stop()`` flushes everything still queued, bounded by a deadline.
 """
 
@@ -30,7 +42,8 @@ import threading
 import time
 from collections import deque
 from collections.abc import Mapping
-from typing import Any, Callable, Dict, List
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, NamedTuple, Sequence, Set
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,12 +64,44 @@ _PG_TRANSACTION_ROLLBACK_CLASS = "40"
 _QUOTE = re.compile(r"[\"'`]")
 
 _OUTCOMES = ("written", "duplicates", "failed", "in_doubt")
-_COUNTERS = ("enqueued", *_OUTCOMES, "dropped_queue_full", "dropped_on_stop", "retries")
+# ``retries``, ``reconciled`` and ``key_collisions`` are diagnostics, not outcomes: a
+# reconciled event is also counted as written, and a key collision as failed.
+_COUNTERS = (
+    "enqueued",
+    *_OUTCOMES,
+    "dropped_queue_full",
+    "dropped_on_stop",
+    "retries",
+    "reconciled",
+    "key_collisions",
+)
 
 
 class CommitOutcomeUnknown(Exception):
     """The COMMIT failed without a known outcome (for example the connection was
-    lost), so the rows may already be stored. Such a write is never retried."""
+    lost), so the rows may already be stored. The write is retried only after the
+    writer has looked up which of its keys are already stored."""
+
+
+class QueuedEvent(NamedTuple):
+    """An accepted event and the sequence number of its idempotency key."""
+
+    seq: int
+    event: Dict[str, Any]
+
+
+@dataclass
+class _Attempt:
+    """What one write, including its retries, achieved."""
+
+    # Events now known to be stored, by this write or by an earlier COMMIT.
+    stored: int = 0
+    # The final error, or None when every event is stored.
+    error: Exception | None = None
+    # The events that are not known to be stored.
+    rest: List[QueuedEvent] = field(default_factory=list)
+    # True when a COMMIT of ``rest`` had an unknown outcome that is still unresolved.
+    in_doubt: bool = False
 
 
 def _load_sqlalchemy_exc() -> Any:
@@ -174,11 +219,12 @@ def _crossed_power_of_two(before: int, after: int) -> bool:
 class SQLBatchWriter:
     """Queue events in memory and insert them in batches from a daemon thread.
 
-    Subclasses implement ``_write_batch(events)``, which must insert every event
-    in one transaction and raise, with nothing committed, on failure; it commits
-    through ``_commit()`` so a COMMIT with an unknown outcome is never replayed.
-    They call ``_start()`` once their tables exist, or ``_disable()`` when they
-    cannot.
+    Subclasses implement two methods. ``_write_batch(items)`` inserts every
+    ``item.event`` with its key ``(self.writer_id, item.seq)`` in one transaction,
+    commits through ``_commit()``, and raises, with nothing committed, on any
+    other failure. ``_stored_seqs(items)`` returns the ``seq`` of every item whose
+    key is already stored. They set ``writer_id``, claimed from the database, and
+    call ``_start()`` once their tables exist, or ``_disable()`` when they cannot.
     """
 
     sink_name = "sql"
@@ -206,8 +252,11 @@ class SQLBatchWriter:
         self.last_error: str | None = None
         self.engine: Any = None
         self.thread: threading.Thread | None = None
+        # Assigned by the database when the sink starts; part of every row's key.
+        self.writer_id: int | None = None
         self._cond = threading.Condition()
-        self._queue: deque[Dict[str, Any]] = deque()
+        self._queue: deque[QueuedEvent] = deque()
+        self._last_seq = 0
         self._in_flight = 0
         self._deadline: float | None = None
         # Set when stop() returned while a write was still running.
@@ -219,17 +268,22 @@ class SQLBatchWriter:
         self.error = error
 
     def _start(self) -> None:
+        if self.writer_id is None:
+            raise RuntimeError("a writer must claim its writer_id before it starts")
         self.thread = threading.Thread(
             target=self._run, name=f"lionlock-{self.sink_name}-writer", daemon=True
         )
         self.thread.start()
 
-    def _write_batch(self, events: List[Dict[str, Any]]) -> None:
+    def _write_batch(self, items: List[QueuedEvent]) -> None:
+        raise NotImplementedError
+
+    def _stored_seqs(self, items: Sequence[QueuedEvent]) -> Set[int]:
         raise NotImplementedError
 
     def _commit(self, commit: Callable[[], Any]) -> None:
         """Run ``commit``. If it fails and the rows may already be stored, raise
-        ``CommitOutcomeUnknown`` so the write is counted as ``in_doubt``, not replayed."""
+        ``CommitOutcomeUnknown``, so the stored keys are looked up before any retry."""
         try:
             commit()
         except Exception as exc:
@@ -242,6 +296,8 @@ class SQLBatchWriter:
 
         A full queue evicts its oldest event so the newest data is kept. Each
         eviction is counted as ``dropped_queue_full`` and reported as a warning.
+        The event's key is assigned here, so an evicted event leaves a gap in the
+        stored sequence numbers.
         """
         if not isinstance(event, Mapping):
             return False
@@ -253,7 +309,8 @@ class SQLBatchWriter:
                 self._queue.popleft()
                 self._counts["dropped_queue_full"] += 1
             dropped = self._counts["dropped_queue_full"]
-            self._queue.append(dict(event))
+            self._last_seq += 1
+            self._queue.append(QueuedEvent(self._last_seq, dict(event)))
             self._counts["enqueued"] += 1
             if len(self._queue) in (1, self.batch_size):
                 self._cond.notify()
@@ -359,7 +416,7 @@ class SQLBatchWriter:
             self._flush(batch)
             last_flush = time.monotonic()
 
-    def _next_batch(self, last_flush: float) -> List[Dict[str, Any]] | None:
+    def _next_batch(self, last_flush: float) -> List[QueuedEvent] | None:
         """Wait (holding ``_cond``) until a batch is due; None tells the worker to exit."""
         while not self.stop_event.is_set():
             queued = len(self._queue)
@@ -378,7 +435,7 @@ class SQLBatchWriter:
         self._in_flight = len(batch)
         return batch
 
-    def _flush(self, batch: List[Dict[str, Any]]) -> None:
+    def _flush(self, batch: List[QueuedEvent]) -> None:
         """Insert ``batch``, recording each event in exactly one outcome counter."""
         outcome = dict.fromkeys(_OUTCOMES, 0)
         try:
@@ -413,55 +470,146 @@ class SQLBatchWriter:
             # stop() already returned with this batch pending: report its outcome.
             self._log_summary("sql_sink_late_outcome")
 
-    def _deliver(self, batch: List[Dict[str, Any]], outcome: Dict[str, int]) -> None:
-        error = self._write_with_retry(batch)
+    def _deliver(self, batch: List[QueuedEvent], outcome: Dict[str, int]) -> None:
+        result = self._write_with_retry(batch)
+        outcome["written"] += result.stored
+        rest, error = result.rest, result.error
         if error is None:
-            outcome["written"] += len(batch)
             return
-        if len(batch) == 1 or is_transient_error(error) or isinstance(error, CommitOutcomeUnknown):
-            # Nothing to isolate; or retries ran out (or reached the stop deadline);
-            # or the rows may already be stored, so inserting them again could
-            # store them twice.
-            outcome[self._outcome_of(error)] += len(batch)
+        if len(rest) == 1 or is_transient_error(error) or isinstance(error, CommitOutcomeUnknown):
+            # Nothing to isolate; or retries ran out (or reached the stop deadline).
+            outcome[self._outcome_of(error, result.in_doubt, rest)] += len(rest)
             return
         # The failed batch was rolled back. Insert its rows one by one so a single
         # duplicate or invalid row cannot take the rest of the batch down with it.
-        for index, event in enumerate(batch):
+        # Each row's key is looked up first when an earlier COMMIT may have stored it.
+        for index, item in enumerate(rest):
             if self._past_deadline():
-                outcome["failed"] += len(batch) - index
+                outcome["in_doubt" if result.in_doubt else "failed"] += len(rest) - index
                 return
-            row_error = self._write_with_retry([event])
-            outcome["written" if row_error is None else self._outcome_of(row_error)] += 1
+            row = self._write_with_retry([item], in_doubt=result.in_doubt)
+            outcome["written"] += row.stored
+            if row.error is not None:
+                outcome[self._outcome_of(row.error, row.in_doubt, [item])] += 1
 
-    def _outcome_of(self, error: Exception) -> str:
-        """Final classification of a write error; duplicates are not errors."""
+    def _outcome_of(self, error: Exception, in_doubt: bool, items: Sequence[QueuedEvent]) -> str:
+        """Final classification of a write error on ``items``; true duplicates are not
+        errors."""
         if isinstance(error, CommitOutcomeUnknown):
             self.last_error = str(error)
+        elif in_doubt or not is_duplicate_error(error):
+            self.last_error = describe_error(error)
+        if in_doubt:
             return "in_doubt"
-        if is_duplicate_error(error):
+        if not is_duplicate_error(error):
+            return "failed"
+        return self._confirm_duplicate(error, items)
+
+    def _confirm_duplicate(self, error: Exception, items: Sequence[QueuedEvent]) -> str:
+        """``duplicates`` only when the events' own keys are not stored.
+
+        "Duplicate" means the event is already stored, so it must be confirmed. Outside
+        reconciliation this writer has never stored these events, so a UNIQUE violation
+        with their keys free came from another UNIQUE constraint on the table: a true
+        duplicate. If a key is already stored, another writer holds this writer's id,
+        for example because the writers table was emptied while this writer ran. The
+        event was refused, not stored: it is counted as ``failed`` and
+        ``key_collisions`` and logged as an error. If the lookup itself fails, the
+        duplicate is unconfirmed and the event is counted as ``failed``.
+        """
+        try:
+            taken = self._stored_seqs_with_retry(items) & {item.seq for item in items}
+        except Exception as exc:
+            self.last_error = f"duplicate not confirmed: {describe_error(exc)}"
+            return "failed"
+        if not taken:
             return "duplicates"
-        self.last_error = describe_error(error)
+        with self._cond:
+            before = self._counts["key_collisions"]
+            self._counts["key_collisions"] += len(taken)
+            after = self._counts["key_collisions"]
+        self.last_error = (
+            f"writer key collision: writer_id {self.writer_id} is in use by another writer; "
+            f"{describe_error(error)}"
+        )
+        if _crossed_power_of_two(before, after):
+            _LOGGER.error(
+                "sql_sink_writer_key_collision sink=%s writer_id=%s key_collisions_total=%d",
+                self.sink_name,
+                self.writer_id,
+                after,
+            )
         return "failed"
 
-    def _write_with_retry(self, events: List[Dict[str, Any]]) -> Exception | None:
-        """Write ``events`` in one transaction, retrying transient errors with
-        backoff. Returns None on success, otherwise the final error."""
+    def _stored_seqs_with_retry(self, items: Sequence[QueuedEvent]) -> Set[int]:
+        """``_stored_seqs``, retrying transient errors with the write backoff."""
         attempt = 0
         while True:
             try:
-                self._write_batch(events)
-                return None
+                return self._stored_seqs(items)
             except Exception as exc:
-                if not is_transient_error(exc):
-                    return exc
-                self.last_error = describe_error(exc)
-                if attempt >= self.max_retries:
-                    return exc
+                if not is_transient_error(exc) or attempt >= self.max_retries:
+                    raise
                 attempt += 1
                 if not self._backoff(attempt):
-                    return exc
+                    raise
                 with self._cond:
                     self._counts["retries"] += 1
+
+    def _write_with_retry(self, items: List[QueuedEvent], in_doubt: bool = False) -> _Attempt:
+        """Write ``items`` in one transaction, retrying transient errors and COMMITs
+        with an unknown outcome with backoff.
+
+        ``in_doubt`` means an earlier COMMIT of these items may have stored them.
+        While it holds, every attempt starts by looking up the items' keys: the
+        stored ones are counted as written (and ``reconciled``) and only the rest is
+        inserted. The UNIQUE index on the key backs the lookup up: an insert that
+        races a COMMIT still finishing (possible in PostgreSQL) fails instead of
+        storing a second copy, and the keys are then looked up once more.
+        """
+        stored = 0
+        attempt = 0
+        check = in_doubt
+        resolve_on_check = False
+        conflict_rechecked = False
+        while True:
+            try:
+                if check:
+                    found = self._stored_seqs(items) & {item.seq for item in items}
+                    check = False
+                    if resolve_on_check:
+                        # An insert conflicted after the earlier COMMIT finished, so
+                        # this lookup saw its final outcome.
+                        in_doubt = resolve_on_check = False
+                    if found:
+                        stored += len(found)
+                        items = [item for item in items if item.seq not in found]
+                        with self._cond:
+                            self._counts["reconciled"] += len(found)
+                    if not items:
+                        return _Attempt(stored=stored)
+                self._write_batch(items)
+                return _Attempt(stored=stored + len(items))
+            except CommitOutcomeUnknown as exc:
+                error: Exception = exc
+                in_doubt = check = True
+                self.last_error = str(exc)
+            except Exception as exc:
+                error = exc
+                if not is_transient_error(exc):
+                    if in_doubt and _is_integrity_error(exc) and not conflict_rechecked:
+                        conflict_rechecked = check = resolve_on_check = True
+                        continue
+                    return _Attempt(stored, exc, items, in_doubt)
+                self.last_error = describe_error(exc)
+                check = in_doubt
+            if attempt >= self.max_retries:
+                return _Attempt(stored, error, items, in_doubt)
+            attempt += 1
+            if not self._backoff(attempt):
+                return _Attempt(stored, error, items, in_doubt)
+            with self._cond:
+                self._counts["retries"] += 1
 
     def _backoff(self, attempt: int) -> bool:
         """Wait before retry ``attempt``; False when it could not start before the

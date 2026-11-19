@@ -1,0 +1,41 @@
+{
+  "description": "Synthetic TrustVaultLogger format 2 entries forming one chain (the first links to 64 zeros). 'line' is the line exactly as written, 'hashed' is the canonical JSON of the entry without its sha256 member, and 'sha256' is SHA-256 of 'hashed' as UTF-8. See docs/AUDIT_LOGGING.md.",
+  "vectors": [
+    {
+      "name": "simple payload",
+      "line": "{\"event\":\"detect\",\"format\":2,\"payload\":{\"signal\":\"noop\"},\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"sha256\":\"db5f2c557e0c4d35e2038c0c92501e32338d1abe7a5d056c385e960f18643ef6\",\"ts\":\"2026-01-01T00:00:00Z\"}",
+      "hashed": "{\"event\":\"detect\",\"format\":2,\"payload\":{\"signal\":\"noop\"},\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ts\":\"2026-01-01T00:00:00Z\"}",
+      "sha256": "db5f2c557e0c4d35e2038c0c92501e32338d1abe7a5d056c385e960f18643ef6"
+    },
+    {
+      "name": "integer-like text keys sort as text",
+      "line": "{\"event\":\"detect\",\"format\":2,\"payload\":{\"turn_scores\":{\"10\":0.7,\"9\":0.4}},\"prev_hash\":\"db5f2c557e0c4d35e2038c0c92501e32338d1abe7a5d056c385e960f18643ef6\",\"sha256\":\"066299926f6389f9c27fca2fce15d79a02b4ba6881b90f71836424d50a3493f1\",\"ts\":\"2026-01-01T00:00:01Z\"}",
+      "hashed": "{\"event\":\"detect\",\"format\":2,\"payload\":{\"turn_scores\":{\"10\":0.7,\"9\":0.4}},\"prev_hash\":\"db5f2c557e0c4d35e2038c0c92501e32338d1abe7a5d056c385e960f18643ef6\",\"ts\":\"2026-01-01T00:00:01Z\"}",
+      "sha256": "066299926f6389f9c27fca2fce15d79a02b4ba6881b90f71836424d50a3493f1"
+    },
+    {
+      "name": "numbers",
+      "line": "{\"event\":\"score\",\"format\":2,\"payload\":{\"below_micro\":1e-7,\"big\":123456789012345680000,\"e16\":10000000000000000,\"e20\":100000000000000000000,\"e21\":1e+21,\"max_double\":1.7976931348623157e+308,\"max_safe\":9007199254740991,\"micro\":0.000001,\"min_double\":5e-324,\"neg\":-1.5,\"negative_zero\":0,\"one\":1,\"tenth\":0.1,\"third\":0.3333333333333333,\"zero\":0},\"prev_hash\":\"066299926f6389f9c27fca2fce15d79a02b4ba6881b90f71836424d50a3493f1\",\"sha256\":\"4d322f0a75ed67e0888cdf53de2395df47cb3604082441524be6a9bb14cdaf63\",\"ts\":\"2026-01-01T00:00:02Z\"}",
+      "hashed": "{\"event\":\"score\",\"format\":2,\"payload\":{\"below_micro\":1e-7,\"big\":123456789012345680000,\"e16\":10000000000000000,\"e20\":100000000000000000000,\"e21\":1e+21,\"max_double\":1.7976931348623157e+308,\"max_safe\":9007199254740991,\"micro\":0.000001,\"min_double\":5e-324,\"neg\":-1.5,\"negative_zero\":0,\"one\":1,\"tenth\":0.1,\"third\":0.3333333333333333,\"zero\":0},\"prev_hash\":\"066299926f6389f9c27fca2fce15d79a02b4ba6881b90f71836424d50a3493f1\",\"ts\":\"2026-01-01T00:00:02Z\"}",
+      "sha256": "4d322f0a75ed67e0888cdf53de2395df47cb3604082441524be6a9bb14cdaf63"
+    },
+    {
+      "name": "strings and escapes",
+      "line": "{\"event\":\"note\",\"format\":2,\"payload\":{\"astral\":\"\ud834\udd1e\",\"backslash\":\"a\\\\b\",\"controls\":\"\\b\\t\\n\\f\\r\\u0001\\u001f\",\"del\":\"\u007f\",\"euro\":\"\u20ac\",\"latin\":\"caf\u00e9\",\"line_sep\":\"\u2028\",\"quote\":\"say \\\"hi\\\"\"},\"prev_hash\":\"4d322f0a75ed67e0888cdf53de2395df47cb3604082441524be6a9bb14cdaf63\",\"sha256\":\"aa59d134670c8b8c860610b38f3667ac45bede110e9765d21840234a1fe0c28d\",\"ts\":\"2026-01-01T00:00:03Z\"}",
+      "hashed": "{\"event\":\"note\",\"format\":2,\"payload\":{\"astral\":\"\ud834\udd1e\",\"backslash\":\"a\\\\b\",\"controls\":\"\\b\\t\\n\\f\\r\\u0001\\u001f\",\"del\":\"\u007f\",\"euro\":\"\u20ac\",\"latin\":\"caf\u00e9\",\"line_sep\":\"\u2028\",\"quote\":\"say \\\"hi\\\"\"},\"prev_hash\":\"4d322f0a75ed67e0888cdf53de2395df47cb3604082441524be6a9bb14cdaf63\",\"ts\":\"2026-01-01T00:00:03Z\"}",
+      "sha256": "aa59d134670c8b8c860610b38f3667ac45bede110e9765d21840234a1fe0c28d"
+    },
+    {
+      "name": "key order by UTF-16 code units",
+      "line": "{\"event\":\"order\",\"format\":2,\"payload\":{\"\":\"empty key\",\"Z\":1,\"a\":2,\"aa\":3,\"\u00e9\":4,\"\ud834\udd1e\":\"G clef (U+1D11E)\",\"\uff5a\":\"fullwidth z (U+FF5A)\"},\"prev_hash\":\"aa59d134670c8b8c860610b38f3667ac45bede110e9765d21840234a1fe0c28d\",\"sha256\":\"4484f33a77c713780cb30904fc3adb11129d2dc05d8c4156d8b3365c62f1d752\",\"ts\":\"2026-01-01T00:00:04Z\"}",
+      "hashed": "{\"event\":\"order\",\"format\":2,\"payload\":{\"\":\"empty key\",\"Z\":1,\"a\":2,\"aa\":3,\"\u00e9\":4,\"\ud834\udd1e\":\"G clef (U+1D11E)\",\"\uff5a\":\"fullwidth z (U+FF5A)\"},\"prev_hash\":\"aa59d134670c8b8c860610b38f3667ac45bede110e9765d21840234a1fe0c28d\",\"ts\":\"2026-01-01T00:00:04Z\"}",
+      "sha256": "4484f33a77c713780cb30904fc3adb11129d2dc05d8c4156d8b3365c62f1d752"
+    },
+    {
+      "name": "nesting and literals",
+      "line": "{\"event\":\"nest\",\"format\":2,\"payload\":{\"deep\":{\"b\":{\"a\":{\"z\":\"y\"}}},\"empty_array\":[],\"empty_object\":{},\"flags\":[true,false,null],\"matrix\":[[1,2],[3.5,[4]]]},\"prev_hash\":\"4484f33a77c713780cb30904fc3adb11129d2dc05d8c4156d8b3365c62f1d752\",\"sha256\":\"40d53f34adf95bf4c3c6c77d6b0cab7ffb35a9593e12b0bba41e524b6a058407\",\"ts\":\"2026-01-01T00:00:05Z\"}",
+      "hashed": "{\"event\":\"nest\",\"format\":2,\"payload\":{\"deep\":{\"b\":{\"a\":{\"z\":\"y\"}}},\"empty_array\":[],\"empty_object\":{},\"flags\":[true,false,null],\"matrix\":[[1,2],[3.5,[4]]]},\"prev_hash\":\"4484f33a77c713780cb30904fc3adb11129d2dc05d8c4156d8b3365c62f1d752\",\"ts\":\"2026-01-01T00:00:05Z\"}",
+      "sha256": "40d53f34adf95bf4c3c6c77d6b0cab7ffb35a9593e12b0bba41e524b6a058407"
+    }
+  ]
+}

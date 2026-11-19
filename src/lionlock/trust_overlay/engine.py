@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from statistics import pstdev
 from typing import Any, Iterable
+
+from lionlock.core.numeric import pstdev
 
 from .config import (
     DEFAULT_PROFILE,
@@ -38,7 +40,34 @@ class DriftResult:
         }
 
 
+# Invalid numbers are an error here, never a score. ``max(0.0, min(1.0, nan))`` is 1.0, so before
+# this check a NaN risk became trust 1.0 and the label TRUSTED, and a NaN in the history became a
+# confidence band of [1.0, 1.0]. Every function below therefore checks its numeric inputs and
+# raises ``ValueError`` naming the input and its value. Raising, rather than returning an "invalid"
+# result, matches the only in-repo caller: ``logger.build_trust_record`` already rejects a bad
+# signal summary with ``ValueError``, and the TrustRecord schema has no label or score that means
+# "not computable" (its labels are TRUSTED, MONITOR, AT_RISK and UNTRUSTED, and trust_score must
+# lie in [0, 1]), so any such sentinel would be read as a real verdict downstream.
+
+
+def _finite(value: Any, what: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{what} is not a number: {value!r}") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{what} is not finite: {value!r}")
+    return number
+
+
+def _finite_scores(values: Iterable[Any], what: str) -> list[float]:
+    return [_finite(value, f"{what}[{index}]") for index, value in enumerate(values)]
+
+
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    # Last line of defence: clamping would turn NaN into ``high`` and +/-inf into a bound.
+    if not math.isfinite(value):
+        raise ValueError(f"refusing to clamp a non-finite value: {value!r}")
     return max(low, min(high, value))
 
 
@@ -47,18 +76,25 @@ def compute_trust_score(
     history: Iterable[float] | None = None,
     profile: str | None = None,
 ) -> float:
-    """Compute trust score from overall risk (v1 rule)."""
+    """Compute trust score from overall risk (v1 rule).
+
+    Raises ``ValueError`` when the risk is missing, not a number, or not finite.
+    """
     _ = history
     _ = profile
+    risk_key = "overall_risk"
     overall_risk = derived_signals.get("overall_risk")
     if overall_risk is None:
+        risk_key = "fatigue_score"
         overall_risk = derived_signals.get("fatigue_score")
     if overall_risk is None:
         raise ValueError("signal_summary missing overall_risk or fatigue_score")
-    return _clamp(1.0 - float(overall_risk), 0.0, 1.0)
+    risk = _finite(overall_risk, f"signal_summary {risk_key}")
+    return _clamp(1.0 - risk, 0.0, 1.0)
 
 
 def map_label(score: float, profile: str | None = None) -> str:
+    score = _finite(score, "trust score")
     profile = resolve_profile(profile or DEFAULT_PROFILE)
     thresholds = PROFILE_THRESHOLDS[profile]
     if score >= thresholds["TRUSTED"]:
@@ -71,7 +107,8 @@ def map_label(score: float, profile: str | None = None) -> str:
 
 
 def compute_volatility(score_history: Iterable[float], window_n: int | None = None) -> float:
-    window = list(score_history)[-int(window_n or DEFAULTS["volatility_window_n"]) :]
+    scores = _finite_scores(score_history, "score_history")
+    window = scores[-int(window_n or DEFAULTS["volatility_window_n"]) :]
     if len(window) < 2:
         return 0.0
     return _clamp(float(pstdev(window)), 0.0, 1.0)
@@ -83,12 +120,12 @@ def compute_confidence_band(
     window_n: int | None = None,
     k: float | None = None,
 ) -> dict[str, Any]:
-    scores = list(score_history)
+    scores = _finite_scores(score_history, "score_history")
     window_size = int(window_n or DEFAULTS["score_window_n"])
     window = scores[-window_size:] if window_size > 0 else scores
     std = float(pstdev(window)) if len(window) > 1 else 0.0
     current = scores[-1] if scores else compute_trust_score(derived_signals)
-    k_value = float(k if k is not None else 1.0)
+    k_value = _finite(k if k is not None else 1.0, "confidence band k")
     lower = _clamp(current - k_value * std)
     upper = _clamp(current + k_value * std)
     return {
@@ -129,7 +166,7 @@ def detect_drift(
 ) -> dict[str, Any]:
     profile = resolve_profile(profile or DEFAULT_PROFILE)
     threshold = DRIFT_THRESHOLDS_BY_PROFILE[profile]
-    scores = list(score_history)
+    scores = _finite_scores(score_history, "score_history")
     ts_list = list(timestamps)
     if ts_list and len(ts_list) == len(scores):
         parsed_pairs = [(_parse_timestamp(ts), score) for ts, score in zip(ts_list, scores)]
@@ -188,6 +225,8 @@ def detect_drift(
 
 
 def assign_badge(score: float, volatility: float, drift: dict[str, Any]) -> str:
+    score = _finite(score, "trust score")
+    volatility = _finite(volatility, "volatility")
     total_points = int(drift.get("recent_n", 0)) + int(drift.get("baseline_n", 0))
     if total_points < int(DEFAULTS["drift_min_points"]):
         return "INSUFFICIENT_DATA"
@@ -209,6 +248,7 @@ def trigger_flags(
     drift: dict[str, Any],
     profile: str | None,
 ) -> list[str]:
+    volatility = _finite(volatility, "volatility")
     flags: list[str] = []
     label = map_label(score, profile=profile)
     if label in {"AT_RISK", "UNTRUSTED"}:
