@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 import warnings
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Mapping
 
+from lionlock.core.scoring import DEFAULT_SIGNAL_WEIGHTS
 from lionlock.logging.connection import build_postgres_dsn
+
 try:
     import tomllib  # py>=3.11
 except ModuleNotFoundError:  # pragma: no cover - fallback for older runtimes
@@ -203,8 +206,146 @@ def resolve_gating_enabled(config: Dict[str, Any]) -> bool:
     return True
 
 
-def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
-    """Load config with safe defaults; missing files are non-fatal."""
+# Every value core/gating.py acts on. gating.py compares the mode with "warn_only" and treats any
+# other string as "block", so without this list a misspelling such as "warn_onyl" would silently
+# switch hallucination-risk demotion off.
+SUPPORTED_HALLUCINATION_MODES = ("warn_only", "block")
+THRESHOLD_KEYS = ("yellow", "orange", "red")
+KNOWN_SIGNALS = tuple(DEFAULT_SIGNAL_WEIGHTS)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_finite_number(value: Any) -> bool:
+    if not _is_number(value):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an int too large for a float is not a usable setting either
+        return False
+
+
+def policy_config_problems(config: Mapping[str, Any]) -> List[str]:
+    """Return every reason the gating and signal settings in ``config`` cannot be used.
+
+    Each entry names the key, the offending value and the rule it breaks. A key that is absent
+    means "use the gating default", exactly as ``evaluate_policy`` treats it, except that a
+    thresholds table must be complete: ``severity_band`` indexes all three bands.
+
+    The rules exist because every one of these settings fails *open* when it is wrong. TOML
+    accepts ``nan`` and ``inf``; a NaN weight makes the aggregate NaN, which gating reads as risk
+    0.0, so a response that should be blocked is allowed. A NaN or inverted threshold, an
+    all-zero weight vector and an unknown mode name all lower or remove a gate the same way.
+    """
+    problems: List[str] = []
+
+    def problem(key: str, value: Any, rule: str) -> None:
+        problems.append(f"{key} = {value!r}: {rule}")
+
+    gating = config.get("gating", {})
+    if not isinstance(gating, Mapping):
+        problem("gating", gating, "must be a table")
+        gating = {}
+    signals = config.get("signals", {})
+    if not isinstance(signals, Mapping):
+        problem("signals", signals, "must be a table")
+        signals = {}
+
+    if "enabled" in gating and not isinstance(gating["enabled"], bool):
+        problem("gating.enabled", gating["enabled"], "must be a boolean (true or false)")
+
+    if "hallucination_mode" in gating:
+        mode = gating["hallucination_mode"]
+        if mode not in SUPPORTED_HALLUCINATION_MODES:
+            problem(
+                "gating.hallucination_mode",
+                mode,
+                "must be one of " + ", ".join(repr(m) for m in SUPPORTED_HALLUCINATION_MODES),
+            )
+
+    if "thresholds" in gating:
+        thresholds = gating["thresholds"]
+        if not isinstance(thresholds, Mapping):
+            problem("gating.thresholds", thresholds, "must be a table of yellow, orange and red")
+        else:
+            usable = True
+            for band in THRESHOLD_KEYS:
+                key = f"gating.thresholds.{band}"
+                if band not in thresholds:
+                    problems.append(f"{key} is missing: yellow, orange and red are all required")
+                    usable = False
+                elif not _is_finite_number(thresholds[band]):
+                    problem(key, thresholds[band], "must be a finite number")
+                    usable = False
+            if usable:
+                yellow, orange, red = (thresholds[band] for band in THRESHOLD_KEYS)
+                if not 0.0 <= yellow < orange < red <= 1.0:
+                    problem(
+                        "gating.thresholds",
+                        {band: thresholds[band] for band in THRESHOLD_KEYS},
+                        "must satisfy 0 <= yellow < orange < red <= 1",
+                    )
+
+    enabled = signals.get("enabled")
+    enabled_names: List[str] | None = None
+    if "enabled" in signals:
+        if not isinstance(enabled, list) or not all(isinstance(n, str) for n in enabled):
+            problem("signals.enabled", enabled, "must be a list of signal names")
+        else:
+            enabled_names = list(enabled)
+            for name in enabled_names:
+                if name not in KNOWN_SIGNALS:
+                    problem(
+                        "signals.enabled",
+                        name,
+                        "unknown signal; known signals are " + ", ".join(KNOWN_SIGNALS),
+                    )
+
+    weights = signals.get("weights")
+    weight_map: Mapping[str, Any] | None = None
+    if "weights" in signals:
+        if not isinstance(weights, Mapping):
+            problem("signals.weights", weights, "must be a table of signal weights")
+        else:
+            weight_map = weights
+            for name, value in weights.items():
+                if not _is_finite_number(value) or value < 0:
+                    problem(f"signals.weights.{name}", value, "must be a finite number >= 0")
+
+    # The aggregate is a weighted mean over the enabled signals. If no enabled signal carries
+    # weight it is 0.0 for every response, so the raw-signal channel can never gate anything.
+    # Mirror aggregate_score: an absent or empty weights table means the default weights, and an
+    # absent enabled list means every signal.
+    if not problems:
+        effective_weights = weight_map if weight_map else DEFAULT_SIGNAL_WEIGHTS
+        effective_enabled = enabled_names if enabled_names is not None else list(KNOWN_SIGNALS)
+        if not any(effective_weights.get(name, 0.0) > 0 for name in effective_enabled):
+            problem(
+                "signals",
+                {"enabled": effective_enabled, "weights": dict(effective_weights)},
+                "at least one enabled signal must have a weight > 0",
+            )
+    return problems
+
+
+def validate_policy_config(config: Mapping[str, Any], *, source: str = "config") -> None:
+    """Raise ``ValueError`` listing every problem ``policy_config_problems`` finds."""
+    problems = policy_config_problems(config)
+    if problems:
+        raise ValueError(f"invalid {source}: " + "; ".join(problems))
+
+
+def load_config(
+    path: str = "lionlock.toml", *, env_gating_override: bool = True, validate: bool = True
+) -> Dict[str, Any]:
+    """Load config with safe defaults; missing files are non-fatal, invalid settings are not.
+
+    ``LIONLOCK_GATING_ENABLED`` overrides ``gating.enabled`` for live use. Pass
+    ``env_gating_override=False`` to read ``gating.enabled`` from the file (or the default) only;
+    replay does, so that a recorded policy cannot be changed by the shell it is replayed in.
+    """
     config = copy.deepcopy(DEFAULT_CONFIG)
     config_path = Path(path)
     if config_path.exists():
@@ -217,14 +358,18 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
             raise ValueError(f"cannot load {config_path}: {exc}") from exc
         config = _merge_dict(config, raw)
 
+    if validate:  # resolve_policy validates the merged policy instead (TOML errors stay fatal)
+        validate_policy_config(config, source=f"config {config_path}")
     config.setdefault("gating", {})
-    config["gating"]["enabled"] = resolve_gating_enabled(config)
+    if env_gating_override:
+        config["gating"]["enabled"] = resolve_gating_enabled(config)
 
     logging_cfg = config.get("logging", {})
     sql_cfg = config.get("logging_sql", {})
-    env_token = os.getenv("LIONLOCK_TELEMETRY_TOKEN", "").strip() or os.getenv(
-        "LIONLOCK_SQL_TOKEN", ""
-    ).strip()
+    env_token = (
+        os.getenv("LIONLOCK_TELEMETRY_TOKEN", "").strip()
+        or os.getenv("LIONLOCK_SQL_TOKEN", "").strip()
+    )
     if env_token:
         sql_cfg["token"] = env_token
     # The SQL sink is opt-in: the environment may say where the database is, never whether to use

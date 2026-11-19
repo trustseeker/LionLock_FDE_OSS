@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-import socket
 import sqlite3
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,13 +29,27 @@ from . import reporting
 from .profiles import ScenarioSpec, build_profile
 
 
-LIONLOCK_DB_CANONICAL = "postgresql://localhost/lionlock"
-SQLITE_FALLBACK_PATH = "./sim_out/lionlock_sim.db"
-SQLITE_FALLBACK_URI = f"sqlite:///{SQLITE_FALLBACK_PATH}"
+# Suggested in the "no database configured" error; never used unless the caller passes it.
+SUGGESTED_SQLITE_URI = "sqlite:///sim_out/lionlock_sim.db"
 DEFAULT_PROFILE = "standard"
 DEFAULT_TURNS = 100
 DEFAULT_SEED = 123
 DECISION_ORDER = {"ALLOW": 0, "REFRESH": 1, "BLOCK": 2}
+
+# The simulator never runs the scorer. Each bundle is hand-built from scenario parameters, and its
+# fatigue_risk_index reaches about 0.86, a value lionlock.core.scoring cannot produce (its sigmoid
+# tops out at 0.1192, and nothing in this repository supplies entropy_decay, drift_slope or a
+# latency window). The bundles also declare every input measured (missing_inputs empty) so that
+# gating acts on them. A run therefore exercises the gating policy, the SQL event path and replay;
+# it says nothing about detection, and nothing in it is evidence of calibrated fatigue detection.
+INPUT_ORIGIN = "synthetic"
+SYNTHETIC_INPUTS_NOTE = (
+    "All signal bundles are synthetic: hand-built from scenario parameters, not produced by "
+    "lionlock.core.scoring. Their fatigue values exceed anything the scorer can produce (its "
+    "fatigue_risk_index never exceeds 0.1192) and are declared measured so that gating acts on "
+    "them. The run exercises gating, logging and replay; it is not evidence of detection, and "
+    "fatigue_risk_index remains uncalibrated."
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +67,6 @@ class DbTarget:
     engine: str
     schema: str
     db_source: str
-    offline_fallback_engaged: bool
     warnings: List[str]
 
 
@@ -116,23 +127,20 @@ def _test_postgres_connection(uri: str, *, timeout_s: float = 1.0) -> None:
             pass
 
 
-def _detect_offline(*, timeout_s: float = 0.3) -> bool:
-    targets = [("1.1.1.1", 53), ("8.8.8.8", 53)]
-    for host, port in targets:
-        try:
-            with socket.create_connection((host, port), timeout=timeout_s):
-                return False
-        except OSError:
-            continue
-    return True
-
-
 def _resolve_db_target(
     *,
     explicit_db: str | None,
     env_db: str | None,
     schema_override: str | None,
 ) -> DbTarget:
+    """Use the database the caller named, and only that one.
+
+    There is no default and no fallback. Earlier versions tried a Postgres server on localhost and
+    then opened connections to public DNS resolvers to decide whether to fall back to SQLite, so
+    the database a run wrote to, and whether it touched the network at all, depended on the
+    machine. Now ``--db`` (or ``LIONLOCK_DB_URL``) is required; a ``sqlite:///`` URI never opens a
+    socket, and a Postgres DSN is contacted only because the caller asked for it.
+    """
     warnings: List[str] = []
 
     if explicit_db:
@@ -142,42 +150,25 @@ def _resolve_db_target(
         uri = env_db
         db_source = "env"
     else:
-        uri = LIONLOCK_DB_CANONICAL
-        db_source = "runtime_constant"
+        raise RuntimeError(
+            "no database configured: pass --db "
+            f"{SUGGESTED_SQLITE_URI} for a local file, or --db postgresql://... for a server "
+            "(or set LIONLOCK_DB_URL). The simulator never chooses one for you."
+        )
 
     engine = _detect_engine(uri)
-    offline_fallback_engaged = False
 
     if engine == "postgres":
         try:
             _test_postgres_connection(uri)
         except Exception:
-            offline = _detect_offline()
-            if offline and db_source == "runtime_constant":
-                uri = SQLITE_FALLBACK_URI
-                engine = "sqlite"
-                db_source = "offline_fallback"
-                offline_fallback_engaged = True
-                warnings.append(
-                    "SQLite fallback engaged (offline/no-postgres). Logs are local-only; sync is NOT NOW."
-                )
-            elif offline:
-                raise RuntimeError(
-                    "Postgres DSN provided via CLI/env is unreachable while offline; "
-                    "refusing implicit sqlite fallback. Use --db sqlite:///... (or env) to opt in."
-                ) from None
-            else:
-                raise RuntimeError(
-                    "Postgres resolved but unreachable while online; refusing sqlite fallback."
-                ) from None
+            raise RuntimeError(
+                f"Postgres DSN from {db_source} is unreachable; refusing to fall back. "
+                f"Use --db {SUGGESTED_SQLITE_URI} for a local run."
+            ) from None
 
     if engine == "sqlite":
-        if db_source == "runtime_constant":
-            raise RuntimeError(
-                "SQLite cannot be the runtime default; use --db sqlite:///... or set LIONLOCK_DB_URL."
-            )
-        if db_source != "offline_fallback":
-            warnings.append("SQLite selected; logs are local-only; sync is NOT NOW.")
+        warnings.append("SQLite selected; logs are local-only; sync is NOT NOW.")
         _ensure_sqlite_parent(uri)
 
     schema = schema_override or _default_schema_for_engine(engine)
@@ -187,7 +178,6 @@ def _resolve_db_target(
         engine=engine,
         schema=schema,
         db_source=db_source,
-        offline_fallback_engaged=offline_fallback_engaged,
         warnings=warnings,
     )
 
@@ -224,7 +214,9 @@ def _resolve_policy(
 
     try:
         bundle = policy_registry.resolve_policy(policy_version)
-    except (FileNotFoundError, KeyError, ValueError):
+    except (FileNotFoundError, KeyError):
+        # No policies.toml, or no entry for this version: the documented baseline applies. An
+        # entry that exists but is invalid is an error (ValueError), never a silent baseline.
         config = _baseline_policy_config()
         return policy_version, config, _canonical_config_hash(config)
 
@@ -244,9 +236,54 @@ def _run_id_base(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _append_run_id(run_id: str) -> str:
-    nonce = uuid.uuid4().hex[:8]
-    return f"{run_id}-{nonce}"
+def _existing_append_indexes(uri: str, schema: str, base_run_id: str) -> List[int]:
+    prefix = f"{base_run_id}-"
+    sqlite_path = _sqlite_path_from_uri(uri)
+    if sqlite_path is not None:
+        with sqlite3.connect(sqlite_path) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT session_id FROM events WHERE substr(session_id, 1, ?) = ?",
+                (len(prefix), prefix),
+            ).fetchall()
+    else:
+        if create_engine is None or text is None:
+            raise RuntimeError("SQLAlchemy required for non-sqlite append runs.")
+        validate_identifier(schema, "schema")
+        events_table = f"{schema}.events" if schema else "events"
+        engine = create_engine(uri)
+        try:
+            with engine.connect() as conn:
+                rows = list(
+                    conn.execute(
+                        text(
+                            f"SELECT DISTINCT session_id FROM {events_table} "
+                            "WHERE substr(session_id, 1, :n) = :prefix"
+                        ),
+                        {"n": len(prefix), "prefix": prefix},
+                    ).fetchall()
+                )
+        finally:
+            try:
+                engine.dispose()
+            except Exception:
+                pass
+    indexes = []
+    for (session_id,) in rows:
+        suffix = str(session_id)[len(prefix) :]
+        if suffix.isdigit():
+            indexes.append(int(suffix))
+    return indexes
+
+
+def _append_run_id(uri: str, schema: str, base_run_id: str) -> str:
+    """The next free ``<base>-<n>`` for this run's settings in this database.
+
+    Deterministic: the same database contents give the same run id, so an appended run can be
+    reproduced exactly. (It used to end in a uuid4 nonce.) Two ``--append-run`` writers started at
+    the same moment on one database can pick the same id; run them one after another.
+    """
+    existing = _existing_append_indexes(uri, schema, base_run_id)
+    return f"{base_run_id}-{max(existing, default=0) + 1:04d}"
 
 
 def _timestamp_for_turn(turn_index: int) -> str:
@@ -290,6 +327,10 @@ def _evaluate_policy(bundle: SignalBundle, policy_config: Dict[str, Any]) -> Any
         hallucination_mode=hallucination_mode,
         hard_gate_reasons_enabled=None,
         signal_bundle=bundle,
+        # The policy's own weights decide attribution as well as the aggregate. Without them the
+        # gate named the trigger by the default weights even when the policy had its own.
+        weights=weights,
+        enabled_signals=enabled_signals,
     )
 
 
@@ -373,12 +414,18 @@ def _bundle_for_spec(spec: ScenarioSpec, seed: int) -> SignalBundle:
             low_conf_halluc=0.1,
             congestion_signature=0.1,
         )
+    # missing_inputs=() declares the synthetic inputs measured; see SYNTHETIC_INPUTS_NOTE.
     return SignalBundle(
         signal_schema_version=SIGNAL_SCHEMA_VERSION,
         signal_scores=scores,
         derived_signals=derived,
         missing_inputs=(),
     )
+
+
+def _stored_bundle(bundle: SignalBundle) -> Dict[str, Any]:
+    """The bundle as written to SQL, marked so a row can never pass for a scored one."""
+    return {**bundle.as_dict(), "input_origin": INPUT_ORIGIN}
 
 
 def _delete_run_rows(uri: str, schema: str, run_id: str) -> None:
@@ -448,12 +495,14 @@ def run_simulation(
     base_run_id = _run_id_base(
         profile, turns, seed, policy_version, config_hash, fingerprint
     )
-    run_id = _append_run_id(base_run_id) if append_run else base_run_id
 
     ok, message = sql_init.init_schema(resolved_db, schema=resolved_schema)
     if not ok:
         raise RuntimeError(message)
-    if not append_run:
+    if append_run:
+        run_id = _append_run_id(resolved_db, resolved_schema, base_run_id)
+    else:
+        run_id = base_run_id
         _delete_run_rows(resolved_db, resolved_schema, run_id)
 
     specs = build_profile(profile, turns, seed)
@@ -463,9 +512,9 @@ def run_simulation(
     trigger_counts: Dict[str, int] = {}
     miss_reason_counts: Dict[str, int] = {}
 
-    fatigue_high = False
-    low_conf_high = False
-    congestion_high = False
+    fatigue_input_high = False
+    low_conf_input_high = False
+    congestion_input_high = False
     expected_block = False
     threshold_high = 0.8
 
@@ -478,11 +527,11 @@ def run_simulation(
         expected_decision = _decision_for_db(spec.expected_decision)
 
         if bundle.derived_signals.fatigue_risk_index >= threshold_high:
-            fatigue_high = True
+            fatigue_input_high = True
         if bundle.derived_signals.low_conf_halluc >= threshold_high:
-            low_conf_high = True
+            low_conf_input_high = True
         if bundle.derived_signals.congestion_signature >= threshold_high:
-            congestion_high = True
+            congestion_input_high = True
         if expected_decision == "BLOCK":
             expected_block = True
 
@@ -500,7 +549,7 @@ def run_simulation(
             "session_id": run_id,
             "turn_index": spec.turn_index,
             "timestamp": timestamp,
-            "signal_bundle": bundle,
+            "signal_bundle": _stored_bundle(bundle),
             "gating_decision": actual_decision,
             "decision_risk_score": decision.decision_risk_score,
             "trigger_signal": decision.trigger_signal,
@@ -548,7 +597,7 @@ def run_simulation(
                 "session_id": run_id,
                 "turn_index": spec.turn_index,
                 "timestamp": timestamp,
-                "signal_bundle": bundle,
+                "signal_bundle": _stored_bundle(bundle),
                 "gating_decision": actual_decision,
                 "decision_risk_score": decision.decision_risk_score,
                 "trigger_signal": decision.trigger_signal,
@@ -587,6 +636,7 @@ def run_simulation(
                 "profile": profile,
                 "policy_version": policy_version,
                 "config_hash": config_hash,
+                "input_origin": INPUT_ORIGIN,
             }
         )
 
@@ -626,10 +676,18 @@ def run_simulation(
         },
         "overtrigger_rate": round(overtrigger_rate, 6),
         "overtrigger_status": overtrigger_status,
+        "inputs": {
+            "origin": INPUT_ORIGIN,
+            "produced_by_scorer": False,
+            "note": SYNTHETIC_INPUTS_NOTE,
+        },
+        # Whether the hand-built inputs reached the high band in at least one turn. These describe
+        # what was fed to gating, not anything that was detected.
         "coverage": {
-            "fatigue_high": fatigue_high,
-            "low_conf_halluc": low_conf_high,
-            "congestion_high": congestion_high,
+            "basis": "synthetic_inputs",
+            "fatigue_input_high": fatigue_input_high,
+            "low_conf_halluc_input_high": low_conf_input_high,
+            "congestion_input_high": congestion_input_high,
             "expected_block": expected_block,
         },
         "labels_sha256": labels_sha256,
@@ -639,7 +697,8 @@ def run_simulation(
             "chosen_db_engine": db_target.engine,
             "db_source": db_target.db_source,
             "schema_in_use": db_target.schema,
-            "offline_fallback_engaged": db_target.offline_fallback_engaged,
+            # Kept for report compatibility; there is no fallback any more, so it is always false.
+            "offline_fallback_engaged": False,
             "warnings": list(db_target.warnings),
         },
     }
