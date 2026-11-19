@@ -275,7 +275,7 @@ def validate_trust_record(record: Dict[str, Any]) -> None:
         raise ValueError("pseudonymous_user_key must be str when provided")
 
     hash_scheme = record.get("hash_scheme")
-    if hash_scheme is not None:
+    if "hash_scheme" in record:  # absent is allowed (older records); an explicit null is not
         if hash_scheme not in HASH_SCHEMES:
             raise ValueError(f"hash_scheme must be one of {sorted(HASH_SCHEMES)}")
         if (hash_scheme == HASH_SCHEME_NONE) != (response_hash is None):

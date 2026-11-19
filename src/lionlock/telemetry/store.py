@@ -279,7 +279,30 @@ def _sequence_counter(conn: sqlite3.Connection, table: str) -> int:
         row = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = ?", (table,)).fetchone()
     except sqlite3.OperationalError:  # no AUTOINCREMENT table has ever been written
         return 0
-    return int(row[0]) if row is not None and row[0] is not None else 0
+    if row is None or row[0] is None:
+        return 0
+    value = _parse_row_number(row[0])
+    if value is None:
+        raise _MalformedMetadata(f"sqlite_sequence for {table} is not a row number: {row[0]!r}")
+    return value
+
+
+class _MalformedMetadata(Exception):
+    """Integrity metadata the store cannot parse; verify() reports it as a failed check."""
+
+
+def _parse_row_number(value: Any) -> int | None:
+    """A non-negative row number from SQLite or the meta table, or None if it is not one.
+
+    ``str.isdigit`` alone accepts characters such as '²' that ``int`` rejects, so parse strictly.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return int(value)
+    return None
 
 
 def _anchor(conn: sqlite3.Connection, table: str) -> Tuple[str | None, str | None]:
@@ -294,8 +317,9 @@ def _table_head(conn: sqlite3.Connection, table: str) -> TableHead:
     if row is not None:
         return TableHead(count, int(row[0]), str(row[1]))
     anchor_hash, anchor_seq = _anchor(conn, table)
-    if anchor_hash is not None and anchor_seq is not None and anchor_seq.isdigit():
-        return TableHead(0, int(anchor_seq), anchor_hash)
+    parsed = _parse_row_number(anchor_seq) if anchor_seq is not None else None
+    if anchor_hash is not None and parsed is not None:
+        return TableHead(0, parsed, anchor_hash)
     return TableHead(0, 0, GENESIS_HASH)
 
 
@@ -514,9 +538,10 @@ class LogStore:
         if (anchor_hash is None) != (anchor_seq_text is None):
             return fail(None, "prune anchor is incomplete (anchor hash and anchor_seq disagree)")
         if anchor_seq_text is not None:
-            if not anchor_seq_text.isdigit() or int(anchor_seq_text) < 1:
+            parsed_anchor = _parse_row_number(anchor_seq_text)
+            if parsed_anchor is None or parsed_anchor < 1:
                 return fail(None, "prune anchor_seq is not a positive row number")
-            anchor_seq = int(anchor_seq_text)
+            anchor_seq = parsed_anchor
         expected_prev = anchor_hash if anchor_hash is not None else GENESIS_HASH
         expected_seq = anchor_seq + 1
         hash_at_expected_head: str | None = None
@@ -557,7 +582,10 @@ class LogStore:
         last_seq = expected_seq - 1
         if anchor_hash is not None and not checked:
             return fail(None, f"no rows remain after the prune anchor (seq {anchor_seq})")
-        counter = _sequence_counter(conn, table)
+        try:
+            counter = _sequence_counter(conn, table)
+        except _MalformedMetadata as exc:
+            return fail(None, str(exc))
         if counter > last_seq:
             return fail(
                 last_seq + 1,

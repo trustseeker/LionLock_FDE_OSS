@@ -40,9 +40,11 @@ from .schemas import (
 from .sql_sink import enqueue_record as enqueue_sql_record
 from .versioning import code_fingerprint
 
-# Domain separation: the response-hash key is derived from the salt for this use only, so it can
-# never coincide with the pseudonymous user key computed from the same salt.
-_RESPONSE_HASH_CONTEXT = b"lionlock/trust_overlay/response_hash/v1"
+# Domain separation. pseudonymous_user_key() is HMAC(salt, user_id.encode("utf-8")), so the
+# response-hash key must be derived from an input that no user_id can produce. UTF-8 never
+# contains the byte 0xFF, so a context that starts with it can never be the encoding of a user_id,
+# and no stored pseudonymous_user_key can ever equal (and so disclose) the response-hash key.
+_RESPONSE_HASH_CONTEXT = b"\xfflionlock/trust_overlay/response_hash/v1"
 
 
 def _serialize(entry: Dict[str, Any]) -> str:

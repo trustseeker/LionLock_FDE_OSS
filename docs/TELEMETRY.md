@@ -64,8 +64,9 @@ independent reference: a head recorded somewhere the log's writer cannot change,
 machine, a write-once store or a signed ticket. `lionlock-telemetry head` prints each table's
 head (rows retained, last sequence number, last row hash); keep that output elsewhere, and later
 run `lionlock-telemetry verify --expected-head FILE`, which fails unless each recorded head row is
-still in the chain with the same hash and nothing after it was removed. A log that has grown
-since still verifies. A head that pruning has since removed can no longer be confirmed and fails
+still in the chain with the same hash. A recorded head protects the history up to and including
+that row; rows added after it are protected only by a later head recorded the same way. A log
+that has grown since still verifies. A head that pruning has since removed can no longer be confirmed and fails
 with a reason saying so, so record heads more often than every `logging.sqlite_max_rows` rows.
 From Python: `LogStore.head(table)`, `LogStore.heads()` and `LogStore.verify(expected_head=...)`.
 
