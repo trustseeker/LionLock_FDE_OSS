@@ -274,12 +274,52 @@ lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --token-hashes-f
 ```
 
 Clients set `token_path` (or `LIONLOCK_UPLOAD_TOKEN`). The receiver stores only hashes, so a
-leaked allowlist does not reveal any token. With tokens, the upload rate limit counts per token, so
-a client cannot reset it by changing its install id. Without a token file, the receiver accepts
-anonymous uploads, rate-limited per install id. The client chooses that id, so the anonymous limit
-slows a misbehaving client but cannot stop a deliberate one: **require tokens on any endpoint
-reachable from the internet.** A token file that lists no hashes (empty, or comments only) is
-refused at startup instead of being treated as anonymous mode.
+leaked allowlist does not reveal any token. A request must carry exactly one `Authorization`
+header: a request with two or more is refused with `400` before anything is counted, so the value
+that is checked is always the value that is counted. With tokens, the upload rate limit therefore
+counts per allowlisted token, a client cannot reset it by changing its install id, and only
+allowlisted tokens take up room in the receiver's table of rate counters. Without a token file,
+the receiver accepts anonymous uploads, rate-limited per install id. The client chooses that id,
+so the anonymous limit slows a misbehaving client but cannot stop a deliberate one: **require
+tokens on any endpoint reachable from the internet.** A token file that lists no hashes (empty, or
+comments only) is refused at startup instead of being treated as anonymous mode.
+
+With tokens, each install is bound to the token that first uploads a new segment for it. The
+binding is recorded in the warehouse's `install_owners` table as the token's SHA-256 (the same
+value as its allowlist entry, never the token), in the same transaction as that segment. Any
+other token is then refused for that install with `403 install is bound to a different upload
+token`, whether it sends a new segment or resends stored bytes; the refusal writes no `rejected/`
+note. The uploading client treats `403` as `auth_failed`: it stops and keeps the snapshot in its
+outbox rather than setting it aside, so an install whose id another partner learned and used
+first loses no data, and the operator can resolve the binding. Binding is first come, first
+served: installs whose segments arrived before the binding existed, or while the receiver ran
+anonymously, are unbound until their next new segment. When a partner's token is replaced, move
+its installs to the new token's hash before it uploads, for example with
+`UPDATE install_owners SET token_sha256 = '<new hash>' WHERE token_sha256 = '<old hash>';`.
+Anonymous uploads carry no credential, so they neither bind nor check installs: anyone who knows
+an install id can send segments for it, and a conflicting segment for that install is refused
+with `409` and set aside by the genuine client. This is another reason to require tokens.
+
+The receiver bounds how long and how many requests it handles:
+
+| Limit | Default | When it is reached |
+|---|---|---|
+| Request deadline | 60 s from accepting the connection | The request line, headers and body must all have arrived. A late body is answered `408` and frees its upload slot; slow headers are dropped without a response. Each single read or write still has a 30 s idle limit. |
+| Connections | 32 at once | Further connections are answered `503` with `Retry-After: 30` straight away, without starting a thread or waiting for the request. |
+| Concurrent uploads | 4 | Further uploads are answered `503 receiver is busy` before their bodies are read. |
+
+A full 20,000-row snapshot is a few hundred kilobytes of gzip, so the deadline leaves room for
+slow links; the uploader retries `408` and `503`. These limits are fields of `ReceiverConfig` and
+are not yet options of `lionlock-telemetry serve`. They bound what one slow client can hold, but a
+client that keeps opening connections can still occupy them, so the reverse proxy in front of
+the receiver should also limit connections per client and buffer request bodies (nginx does by
+default; Caddy streams them).
+
+New receiver files are created owner-only: the data directory, `quarantine/`, `accepted/` and
+`rejected/` are created `0700`, and `warehouse.db`, accepted files and rejection notes `0600`, each
+with that mode from the moment it exists. Existing files and directories keep their modes; at
+startup the receiver logs a warning for the data directory, `warehouse.db` or a subdirectory that
+group or others can access, and changes nothing.
 
 ### What the receiver checks
 
@@ -321,8 +361,14 @@ predecessor arrives.
 the receiver creates or writes anything, an existing warehouse is opened read-only and must be
 either empty (no schema of its own, `user_version` 0, `application_id` 0; empty tables do not
 count, and only SQLite's internal `sqlite_` objects are disregarded) or an exact match for the current layout, including its tables, columns, keys, and
-indexes. Anything else, including an older layout, is refused without changing its file,
-version fields, or records; start the receiver with a new data directory.
+indexes. One exception is upgraded in place: a v2 warehouse written before install binding,
+which matches the current layout exactly except that it has no `install_owners` table. The
+receiver adds that empty table in a single transaction and logs that it did; no existing row,
+table, index or version field changes, and the file keeps its mode. An older receiver refuses an
+upgraded warehouse unchanged, so upgrade `bigquery-sync` together with the receiver; a current
+`bigquery-sync` reads warehouses from before and after the upgrade. Anything else, including an
+older layout, is refused without changing its file, version fields, or records; start the
+receiver with a new data directory.
 
 For production, run the receiver as an unprivileged user in a container with a read-only root
 filesystem, a writable data volume, and memory limits.
@@ -388,7 +434,7 @@ fatigue score itself is uncalibrated — see the note on `FATIGUE_SIGMOID_GAIN` 
 ### Deletion requests
 
 `lionlock-telemetry status` shows an install's `install_id`. To delete everything uploaded under
-it, remove its rows from `uploads`, `events`, and `trust_records`, along with the files in
+it, remove its rows from `uploads`, `events`, `trust_records`, and `install_owners`, along with the files in
 `accepted/` named by those rows' `stored_sha256`. `lionlock-telemetry reset-identity` rotates the install ID and pseudonymization
 key, so future uploads cannot be linked to past ones. If you copy the warehouse to BigQuery, delete
 the same rows there too (`DELETE FROM dataset.events WHERE install_id = '...'`, and likewise for
@@ -451,10 +497,14 @@ The command prints a JSON summary of the rows and jobs it loaded, and exits non-
 | Bytes hidden in a snapshot file (appended data, deleted-row residue) | The uploader sends, and the receiver stores, only files rebuilt from validated rows; raw uploads are deleted after validation |
 | A private name passed off as a label or version | Label fields accept only the listed public values, in the client and the receiver alike |
 | A deliberately modified client encodes data in numeric fields | Not prevented: numbers are range-checked, not interpreted. Treat uploads from clients you do not control as untrusted |
-| A crafted SQLite file attacks the parser | Size caps, read-only defensive open, `quick_check`, schema check before any data is read; isolate the process |
+| A crafted SQLite file attacks the parser | Size caps, read-only defensive open, `quick_check`, schema check before any data is read; JSON nested too deeply or too large to decode is an ordinary rejection (`422` and a `rejected/` note; `inspect` reports it invalid); isolate the process |
 | A bearer token leaks in transit | HTTPS only (plain http only for loopback, never via a proxy), no redirects, token read from env or file and never logged; the server stores only hashes |
 | Re-identification through identifiers | Keyed HMAC pseudonyms that cannot be linked across installs; hour-level timestamps; coarse platform data; identity reset |
 | Poisoned or fake uploads | Optional tokens, per-token rate limits (per-install, and bypassable, without tokens), segment chain status; treat community data as statistical |
+| A second `Authorization` header dodges the per-token limit or fills the rate table | A request must carry exactly one `Authorization` header (`400` otherwise); the value that is authorized is the value that is counted, so only allowlisted tokens become rate keys |
+| A partner uploads for another partner's install (install squatting) | With tokens, each install is bound to the token that first uploads for it, and other tokens get `403`, which the genuine client keeps in its outbox instead of setting aside. First come, first served: an install not yet bound can be claimed by whoever uses its id first. Not prevented without tokens |
+| Slow clients hold connections or upload slots | A 60 s deadline for the whole request, a 30 s idle limit per read or write, at most 32 connections (`503` beyond) and 4 uploads at once; a client that keeps reconnecting can still occupy them, so limit connections per client at the reverse proxy |
+| A request writes control characters into the receiver log | They are escaped, as the standard library does; client addresses are never logged |
 | Local log tampering | Per-table hash chains and `lionlock-telemetry verify` catch edits and plain-SQL deletions; a truncated or rewritten history is caught only against a head kept elsewhere (`verify --expected-head`) |
 | Receiver compromise | Data minimization limits what an attacker can obtain |
 
