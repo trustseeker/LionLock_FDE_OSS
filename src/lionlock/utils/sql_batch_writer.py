@@ -45,6 +45,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, NamedTuple, Sequence, Set
 
+from lionlock.utils.sql_optional import loaded_sqlalchemy_exc
+
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MAX_RETRIES = 5
@@ -59,6 +61,9 @@ _SQLITE_CONSTRAINT_PRIMARYKEY = 1555
 _SQLITE_CONSTRAINT_UNIQUE = 2067
 # PostgreSQL SQLSTATEs: unique_violation, and class 40 (transaction rollback).
 _PG_UNIQUE_VIOLATION = "23505"
+# MySQL and MariaDB ER_DUP_ENTRY. SQLSTATE 23000 is shared by every integrity violation
+# (foreign key, NOT NULL, ...), so only this error number identifies a duplicate.
+_MYSQL_DUP_ENTRY = 1062
 _PG_TRANSACTION_ROLLBACK_CLASS = "40"
 
 _QUOTE = re.compile(r"[\"'`]")
@@ -104,15 +109,10 @@ class _Attempt:
     in_doubt: bool = False
 
 
-def _load_sqlalchemy_exc() -> Any:
-    try:
-        from sqlalchemy import exc
-    except Exception:
-        return None
-    return exc
-
-
-_SA_EXC: Any = _load_sqlalchemy_exc()
+def _sa_exc() -> Any:
+    """``sqlalchemy.exc`` when SQLAlchemy is loaded, else None. An exception SQLAlchemy raised
+    implies the package is loaded, so classifying errors never has to import it."""
+    return loaded_sqlalchemy_exc()
 
 
 def _driver_error(exc: BaseException) -> BaseException:
@@ -127,6 +127,18 @@ def _sqlstate(driver_exc: BaseException) -> str | None:
     return sqlstate if isinstance(sqlstate, str) and sqlstate else None
 
 
+def _mysql_errno(driver_exc: BaseException) -> int | None:
+    """MySQL error number of a PyMySQL or mysqlclient (MySQLdb) error.
+
+    Both raise ``Error(errno, message)``, so the number is ``args[0]``. PostgreSQL and SQLite
+    drivers put a string there, or nothing, so an integer identifies the MySQL family.
+    """
+    args = getattr(driver_exc, "args", None)
+    if args and isinstance(args[0], int) and not isinstance(args[0], bool):
+        return args[0]
+    return None
+
+
 def _is_sqlite_busy(exc: BaseException) -> bool:
     if not isinstance(exc, sqlite3.OperationalError):
         return False
@@ -138,8 +150,9 @@ def _is_sqlite_busy(exc: BaseException) -> bool:
 
 
 def _is_integrity_error(exc: BaseException) -> bool:
+    sa_exc = _sa_exc()
     return isinstance(_driver_error(exc), sqlite3.IntegrityError) or (
-        _SA_EXC is not None and isinstance(exc, _SA_EXC.IntegrityError)
+        sa_exc is not None and isinstance(exc, sa_exc.IntegrityError)
     )
 
 
@@ -147,17 +160,18 @@ def is_transient_error(exc: BaseException) -> bool:
     """True when retrying may succeed: lock contention or a lost connection."""
     if isinstance(exc, sqlite3.Error):
         return _is_sqlite_busy(exc)
-    if _SA_EXC is None:
+    sa_exc = _sa_exc()
+    if sa_exc is None:
         return False
-    if isinstance(exc, (_SA_EXC.TimeoutError, _SA_EXC.DisconnectionError)):
+    if isinstance(exc, (sa_exc.TimeoutError, sa_exc.DisconnectionError)):
         return True
-    if not isinstance(exc, _SA_EXC.DBAPIError):
+    if not isinstance(exc, sa_exc.DBAPIError):
         return False
     if exc.connection_invalidated:
         return True
     if isinstance(exc.orig, sqlite3.Error):
         return _is_sqlite_busy(exc.orig)
-    return isinstance(exc, _SA_EXC.OperationalError)
+    return isinstance(exc, sa_exc.OperationalError)
 
 
 def is_duplicate_error(exc: BaseException) -> bool:
@@ -168,6 +182,10 @@ def is_duplicate_error(exc: BaseException) -> bool:
     code = getattr(driver_exc, "sqlite_errorcode", None)  # Python 3.11+
     if isinstance(code, int):
         return code in (_SQLITE_CONSTRAINT_UNIQUE, _SQLITE_CONSTRAINT_PRIMARYKEY)
+    mysql_errno = _mysql_errno(driver_exc)
+    if mysql_errno is not None:
+        # Checked before SQLSTATE: PyMySQL also sets ``sqlstate`` (23000) on these errors.
+        return mysql_errno == _MYSQL_DUP_ENTRY
     sqlstate = _sqlstate(driver_exc)
     if sqlstate is not None:
         return sqlstate == _PG_UNIQUE_VIOLATION

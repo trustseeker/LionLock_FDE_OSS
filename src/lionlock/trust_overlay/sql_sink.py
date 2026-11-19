@@ -8,12 +8,6 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
 
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
-
 from lionlock.logging.connection import validate_identifier
 from lionlock.utils.sql_batch_writer import (
     DEFAULT_MAX_RETRIES,
@@ -22,6 +16,7 @@ from lionlock.utils.sql_batch_writer import (
     QueuedEvent,
     SQLBatchWriter,
 )
+from lionlock.utils.sql_optional import load_sqlalchemy
 from lionlock.utils.sql_writer_keys import (
     WRITER_KEY_COLUMNS,
     claim_writer_id_sqlalchemy,
@@ -125,6 +120,7 @@ def _init_sqlite_tables(
 
 
 def _init_sqlalchemy_tables(engine: Any, table: str) -> None:
+    _, text = load_sqlalchemy()
     if text is None:
         raise RuntimeError("SQLAlchemy is required for non-sqlite Trust Overlay SQL.")
     with engine.begin() as conn:
@@ -162,6 +158,7 @@ def init_db(config: Dict[str, Any]) -> Tuple[bool, str]:
             validate_identifier(table, "trust_overlay.sql.table")
             _init_sqlite_tables(sqlite_path, table)
             return True, "Initialized trust overlay sqlite table."
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot init trust overlay SQL."
         if not dsn:
@@ -263,6 +260,7 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
             else:
                 self._init_tables()
         else:
+            create_engine, text = load_sqlalchemy()
             if create_engine is None or text is None:
                 self.available = False
                 self.error = "SQLAlchemy not installed; trust overlay SQL disabled."
@@ -286,6 +284,7 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
                     claim_for=self.sink_name,
                 )
             else:
+                create_engine, text = load_sqlalchemy()
                 if create_engine is None or text is None:
                     raise RuntimeError("SQLAlchemy not installed.")
                 self.engine = create_engine(self.dsn)
@@ -307,6 +306,7 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
                 conn.executemany(sql, rows)
                 self._commit(conn.commit)
             return
+        _, text = load_sqlalchemy()
         if self.engine is None or text is None:
             raise RuntimeError("SQLAlchemy not installed.")
         values = ",".join(f":{name}" for name, _ in TRUST_OVERLAY_COLUMNS)
@@ -332,6 +332,7 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
             with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
                 rows = conn.execute(sql, params).fetchall()
         else:
+            _, text = load_sqlalchemy()
             if self.engine is None or text is None:
                 raise RuntimeError("SQLAlchemy not installed.")
             with self.engine.connect() as conn:
