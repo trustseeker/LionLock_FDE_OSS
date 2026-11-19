@@ -1,12 +1,59 @@
 # Changelog
 
-## Unreleased — audit fixes
+## 1.0.0b2 — security, integrity and data-preservation fixes
 
-From a full review of `src/` after the move to fully open source. Each fix has a test that fails on
-`1.0.0b2`.
+Recommended for everyone on `1.0.0b1`. That release was published before everything below, so an
+install pinned to it still fails open on the settings described under Fixed.
+
+This release also includes the fixes from the November 2026 review: the gate decision rule
+(D1), runtime, audit-log and receiver hardening, and a release process that tests the built files
+before they are uploaded. Every behaviour change below has a test that fails on the code before
+the fix.
+
+**If you use the opt-in `sqlite:///...` telemetry sink, or run a telemetry receiver, read the
+Compatibility notes before upgrading.**
 
 ### Fixed
 
+- **The gate could name a signal that did not drive the decision, and soften a worse reply more
+  than a milder one.** The raw-channel trigger was the largest *unweighted* score, so
+  `hallucination_risk` (weight 0 by default) could be named, and warn-only mode then softened the
+  decision. A reply that repeated "banana" 200 times was refreshed while one repeating an on-topic
+  word was blocked. The trigger is now the enabled signal with the largest weighted contribution;
+  warn-only softens a red decision only when hallucination evidence alone makes it red; the
+  hard-gate list keeps a block whenever the listed evidence alone is red; and raising any score
+  never lowers the action (spec LL-0002, decision D1).
+- **Invalid settings no longer fail open.** A `nan` weight could turn BLOCK into ALLOW, a `nan` red
+  threshold meant nothing was ever red, and a misspelt `hallucination_mode` behaved like `block`.
+  Invalid modes, thresholds, weights and enabled signals, and non-finite scores, are now refused
+  with an error that names the setting, both in `evaluate_policy` and when a config is loaded.
+  The trust overlay no longer reports a non-finite risk as TRUSTED.
+- **Replay used the shell's `LIONLOCK_GATING_ENABLED`, and replay and the simulator used default
+  weights.** Replay now uses only the recorded policy, and both pass the policy's weights and
+  enabled signals to the gate. A malformed `policies.toml` entry is an error rather than a silent
+  fall-back to the baseline.
+- **The simulator probed the network.** It no longer opens any connection; `--db` or
+  `LIONLOCK_DB_URL` is required.
+- **Scores differed between Python 3.10 and later versions.** Standard deviations are now computed
+  exactly and rounded once, so scores are identical bit for bit on Python 3.10 to 3.14 for every
+  input tested; metadata integers too large for a float count as missing instead of crashing.
+- **Validation depended on whether pydantic was installed, and pydantic plugins could see prompts
+  and replies.** There is now one pure-Python validator that matches pydantic 2.13.5's verdicts.
+- **Honest `TrustVaultLogger` logs with integer payload keys failed verification, and NaN was
+  written as invalid JSON.** New entries use a documented canonical format (format 2, RFC 8785)
+  that any language can verify; payloads without a canonical form are refused before anything is
+  written, and a line with a repeated JSON member is rejected.
+- **Rows deleted from either end of the local SQLite log still verified.** `verify` now checks
+  contiguity, the prune anchor and SQLite's sequence counter, and can check against a head
+  recorded elsewhere (`lionlock-telemetry head`, `verify --expected-head FILE`).
+- **New log files and the token file could be read by other users.** They are now created owner
+  only (files 0600, directories 0700). Trust Overlay records no longer hold an unsalted hash of the
+  reply or of the hostname, nor free-text notes; `response_hash` is keyed with the configured salt.
+- **The receiver could be worked around or held up.** A second `Authorization` header could dodge
+  the per-token rate limit (now 400); one partner could upload for another's install (now 403);
+  slow clients could hold connections indefinitely (now a 60 s deadline and a 32-connection cap);
+  deeply nested JSON crashed validation (now a normal rejection); and control characters reached
+  the log (now escaped). New receiver data paths are created owner only.
 - **The LLM connector could leak its API key.** urllib follows a redirected POST (301/302/303) as
   a GET that still carries `Authorization`, so one redirect sent the bearer key to whatever host
   the server named. Redirects are no longer followed, the key is never sent over plain http except
@@ -36,60 +83,6 @@ From a full review of `src/` after the move to fully open source. Each fix has a
   keys the event log already refused.
 - Per-event SQL telemetry no longer rebuilds the token verifier (and its database connection) or
   re-reads `.env` for every event.
-
-### Changed
-
-- **The SQL sinks no longer give up on a COMMIT with an unknown outcome.** Each stored row now
-  carries an idempotency key, `(writer_id, writer_seq)`, with a UNIQUE index on it, so such a
-  write is retried safely: the writer looks up which of the batch's keys are already stored and
-  inserts only the rest. Events are counted as `in_doubt` only when the outcome is still unknown
-  after the retries. Writer ids are assigned by the database, so the keys involve no randomness.
-  A new `reconciled` counter reports events found already stored.
-- **A writer id is never reused, and a key collision is never reported as a duplicate.** The next
-  id is claimed above every id in both the writers table and the sink table, so emptying or
-  dropping `lionlock_sql_writers` cannot make new events collide with stored ones. A UNIQUE
-  violation is counted as `duplicates` only after a lookup confirms the event's own key is free;
-  if another writer holds the key, the event is counted as `failed` and `key_collisions` and
-  logged at ERROR level.
-
-### Compatibility
-
-- The database host and port no longer fall back to the generic `HOST` and `PORT` variables; set
-  `LIONLOCK_DB_HOST` / `LIONLOCK_DB_PORT` (or the `LIONLOCK_TELEMETRY_DB_*` forms).
-- Deployments that relied on environment credentials alone to turn on SQL telemetry must set
-  `logging_sql.enabled = true` (and `logging.backend = "sql"` or `"both"`).
-- Settings other than database connection settings must come from the real environment or an
-  explicit `load_dotenv(path)`, not from an implicitly found `.env`. In particular a
-  `LIONLOCK_GATING_ENABLED` line in `.env` is now ignored: set `[gating] enabled` in
-  `lionlock.toml`, or export the variable. This also removes an inconsistency where the first
-  `load_config()` ignored `.env` and a later one, after a database DSN was built, applied it.
-  `.env.example` is now a database-settings template.
-- Calling the LLM connector with an API key over plain http to a non-local host now fails with
-  `insecure_endpoint_for_api_key`; use https.
-- A `TrustVaultLogger` file whose last line is damaged must be inspected (and repaired) before new
-  entries can be written.
-- The SQL telemetry and Trust Overlay tables gain two nullable columns, `writer_id` and
-  `writer_seq`, and a UNIQUE index on them; a new `lionlock_sql_writers` table records each
-  writer. Existing tables are upgraded in place the first time a writer starts, keeping their
-  rows (with NULL keys). This needs privileges to alter the table and create the index, and
-  building the index takes one pass over a large table. A Trust Overlay table missing any of the
-  sink's columns is now refused at startup instead of failing every insert.
-- **The upgrade is one-way for native SQLite telemetry databases.** Earlier code that checks the
-  telemetry schema, including the source the README currently pins for 1.0.0b2, refuses an
-  upgraded `lionlock_signals`. 1.0.0b1, Trust Overlay tables and telemetry through SQLAlchemy keep
-  working. `docs/AUDIT_LOGGING.md` ("Going back to an earlier release") gives the tested SQL that
-  restores the earlier layout.
-
-## 1.0.0b2 — security and data-preservation fixes
-
-Recommended for everyone on `1.0.0b1`. That release was published before everything below, so an
-install pinned to it still fails open on the three settings in the first group.
-
-**If you use the opt-in `sqlite:///...` telemetry sink with a customized schema, read the
-Compatibility note before upgrading.**
-
-### Fixed
-
 - **The opt-in SQL telemetry sink could destroy existing tables on initialization.** The native
   `sqlite:///...` path rebuilt its tables, dropping and recreating them. Initialization now checks
   the existing `lionlock_sessions`, `lionlock_signals` and `lionlock_failsafe` objects against
@@ -115,6 +108,16 @@ Compatibility note before upgrading.**
 
 ### Added
 
+- `lionlock-telemetry head` and `verify --expected-head FILE`; `LogStore.head()`, `heads()` and
+  `verify(expected_head=...)`.
+- `GateDecision.policy_adjustment`, which names the policy that changed an action
+  (`warn_only_hallucination`, `hard_gate_reason_disabled` or `gating_disabled`).
+- A `py.typed` marker, `lionlock.__version__`, and packaged synthetic sample sessions:
+  `python -m lionlock.sample_data` runs the quickstart after `pip install`.
+- The publish workflow tests the exact wheel and sdist in a fresh environment (`twine check
+  --strict`, `pip check`, a smoke test and both CLIs) before upload, records their sha256, and
+  states PEP 740 attestations explicitly. `scripts/reproducible_build.py` gives byte-identical
+  files for the same commit.
 - An agent-agnostic development harness. `make verify` is one gate over tests, lint, type checks,
   determinism, privacy and file scope, and it behaves identically for every contributor.
 - A runtime check that scoring and gating reach no network, rather than only a claim that they do
@@ -128,14 +131,72 @@ Compatibility note before upgrading.**
 
 ### Changed
 
+- `severity` is always the band of `decision_risk_score`; policy changes only the action, and says
+  so in `policy_adjustment`. Before, warn-only and the hard-gate list rewrote red to orange.
+- `lionlock-sim --append-run` ids are `<id>-<n>`; the sim report gains an `inputs` block marking its
+  sessions as synthetic, and coverage keys are renamed `*_input_high`.
+- Validation errors no longer echo their input. Pydantic is no longer used at runtime.
+- The package description now says what LionLock does and does not claim.
+- **The SQL sinks no longer give up on a COMMIT with an unknown outcome.** Each stored row now
+  carries an idempotency key, `(writer_id, writer_seq)`, with a UNIQUE index on it, so such a
+  write is retried safely: the writer looks up which of the batch's keys are already stored and
+  inserts only the rest. Events are counted as `in_doubt` only when the outcome is still unknown
+  after the retries. Writer ids are assigned by the database, so the keys involve no randomness.
+  A new `reconciled` counter reports events found already stored.
+- **A writer id is never reused, and a key collision is never reported as a duplicate.** The next
+  id is claimed above every id in both the writers table and the sink table, so emptying or
+  dropping `lionlock_sql_writers` cannot make new events collide with stored ones. A UNIQUE
+  violation is counted as `duplicates` only after a lookup confirms the event's own key is free;
+  if another writer holds the key, the event is counted as `failed` and `key_collisions` and
+  logged at ERROR level.
 - Two claims about the no-network guarantee were stronger than the evidence and have been narrowed
   to what is actually proved. Parsing imports cannot see a module reaching the network through a
   dependency it never names, and a third-party compiled extension *is* loaded on the scoring path
   (`pydantic_core`), which name-based audits cannot speak to either way. Both gaps are now stated
-  as open, and the extension surface is pinned by a test.
+  as open, and the extension surface is pinned by a test. (Later in this release pydantic was
+  removed from the runtime path; see above.)
 
 ### Compatibility
 
+- **Configs and policies that loaded before may now be refused**, with an error naming the bad
+  setting. A `severity` of `red` can now come with a `REFRESH` or `ALLOW` action; read
+  `policy_adjustment`. `trigger_signal` and `reason_code` can differ, because attribution is now
+  weighted.
+- **An older LionLock cannot verify format-2 `TrustVaultLogger` entries.** Existing logs are not
+  rewritten and verify exactly as before. Existing file modes are not tightened: run `chmod 600`
+  on older logs.
+- **Receiver warehouses gain an `install_owners` table on first start and are then refused by
+  older receivers and older `bigquery-sync`.** Upgrade both together, and receivers before
+  clients. When a partner's token is replaced, re-bind its installs with an
+  `UPDATE install_owners` statement (see `docs/TELEMETRY.md`).
+- Trust Overlay records lose `host_id_hash`, `container_id_hash` and `signal_summary.notes`, and
+  joins on the old unsalted `response_hash` no longer match.
+- `lionlock-sim` needs `--db` or `LIONLOCK_DB_URL`.
+- The database host and port no longer fall back to the generic `HOST` and `PORT` variables; set
+  `LIONLOCK_DB_HOST` / `LIONLOCK_DB_PORT` (or the `LIONLOCK_TELEMETRY_DB_*` forms).
+- Deployments that relied on environment credentials alone to turn on SQL telemetry must set
+  `logging_sql.enabled = true` (and `logging.backend = "sql"` or `"both"`).
+- Settings other than database connection settings must come from the real environment or an
+  explicit `load_dotenv(path)`, not from an implicitly found `.env`. In particular a
+  `LIONLOCK_GATING_ENABLED` line in `.env` is now ignored: set `[gating] enabled` in
+  `lionlock.toml`, or export the variable. This also removes an inconsistency where the first
+  `load_config()` ignored `.env` and a later one, after a database DSN was built, applied it.
+  `.env.example` is now a database-settings template.
+- Calling the LLM connector with an API key over plain http to a non-local host now fails with
+  `insecure_endpoint_for_api_key`; use https.
+- A `TrustVaultLogger` file whose last line is damaged must be inspected (and repaired) before new
+  entries can be written.
+- The SQL telemetry and Trust Overlay tables gain two nullable columns, `writer_id` and
+  `writer_seq`, and a UNIQUE index on them; a new `lionlock_sql_writers` table records each
+  writer. Existing tables are upgraded in place the first time a writer starts, keeping their
+  rows (with NULL keys). This needs privileges to alter the table and create the index, and
+  building the index takes one pass over a large table. A Trust Overlay table missing any of the
+  sink's columns is now refused at startup instead of failing every insert.
+- **The upgrade is one-way for native SQLite telemetry databases.** Earlier code that checks the
+  telemetry schema, including the earlier pre-release 1.0.0b2 source commit `05434565`, refuses an
+  upgraded `lionlock_signals`. 1.0.0b1, Trust Overlay tables and telemetry through SQLAlchemy keep
+  working. `docs/AUDIT_LOGGING.md` ("Going back to an earlier release") gives the tested SQL that
+  restores the earlier layout.
 - **On the native `sqlite:///...` path, extra custom columns on a telemetry table are now
   refused**, even where named-column inserts worked before. This can turn startup into a
   `RuntimeError` through `get_writer`. Review customized schemas and take a backup before

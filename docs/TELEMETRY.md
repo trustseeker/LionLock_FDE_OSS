@@ -268,7 +268,7 @@ revision in a separate directory before running it from your activated LionLock 
 
 ```bash
 git clone --no-checkout https://github.com/trustseeker/LionLock_FDE_OSS.git LionLock-token-tools
-git -C LionLock-token-tools checkout --detach 05434565c96a9534494110cf048caad804dc343d
+git -C LionLock-token-tools checkout --detach v1.0.0b2
 python LionLock-token-tools/scripts/log_token_tool.py generate --token-path upload.token --hashes-path token_hashes.txt
 lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --token-hashes-file token_hashes.txt
 ```
