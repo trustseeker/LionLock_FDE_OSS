@@ -106,3 +106,21 @@ def test_an_overlong_prune_anchor_fails_verification(tmp_path: Path) -> None:
     reopened = LogStore(path)
     assert reopened.verify()["events"].ok is False
     reopened.head("events")  # no crash
+
+
+def test_a_line_with_a_repeated_member_is_rejected(tmp_path: Path) -> None:
+    from lionlock import TrustVaultLogger
+    from lionlock.utils.chain_verifier import TamperDetectedError, verify_chain_file
+
+    path = tmp_path / "trustvault.log"
+    logger = TrustVaultLogger(str(path))
+    logger.record(event="detect", payload={"signal": "real"})
+    logger.flush()
+    logger.close()
+    verify_chain_file(path)
+    line = path.read_text(encoding="utf-8").strip()
+    # A reader that keeps the first value sees "shown"; json.loads keeps the last and verifies.
+    tampered = '{"payload":{"signal":"shown"},' + line[1:]
+    path.write_text(tampered + "\n", encoding="utf-8")
+    with pytest.raises(TamperDetectedError, match="Duplicate member"):
+        verify_chain_file(path)

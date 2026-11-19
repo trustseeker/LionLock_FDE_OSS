@@ -136,6 +136,21 @@ def verify_chain(
         raise TamperDetectedError("Recorded head is not in the log (truncated or rewritten)")
 
 
+class _DuplicateMember(ValueError):
+    pass
+
+
+def _reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """``json.loads`` keeps the last of repeated keys, so two readers could see different values
+    in the same line. A line with a repeated key is never accepted as part of a chain."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateMember(key)
+        result[key] = value
+    return result
+
+
 def verify_chain_file(
     path: str | Path,
     *,
@@ -153,7 +168,11 @@ def verify_chain_file(
             if not text:
                 continue
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(text, object_pairs_hook=_reject_duplicate_members)
+            except _DuplicateMember as exc:
+                raise TamperDetectedError(
+                    f"Duplicate member {str(exc)!r} at line {line_number}"
+                ) from exc
             except json.JSONDecodeError as exc:
                 raise TamperDetectedError(f"Invalid JSON at line {line_number}") from exc
             if not isinstance(parsed, dict):
