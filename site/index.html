@@ -332,14 +332,17 @@ print(decision.severity, decision.gating_decision, decision.reason_code)</code><
           evaluation set yet, so there is no precision or recall to quote.
         </li>
         <li>
-          <strong>The fatigue score is uncalibrated.</strong> An attempt to calibrate it was
+          <strong>The fatigue score is uncalibrated, and LionLock does not claim to detect
+          model fatigue.</strong> An attempt to calibrate it was
           abandoned because a threshold fitted on one set of results did not carry over to
           another, so it is withheld from the gating channel when its inputs are missing.
         </li>
         <li>
-          <strong>Tokenization is English-oriented.</strong> It matches
-          <code>[A-Za-z0-9']+</code>, so accented and non-Latin scripts score differently
-          from English text.
+          <strong>English only.</strong> Scoring in 1.0 is built and checked for English.
+          The tokenizer matches <code>[A-Za-z0-9']+</code>, so accented and non-Latin
+          scripts score differently and their decisions are not meaningful. Other languages
+          are planned for later releases, each listed as supported only once its own results
+          are published.
         </li>
       </ul>
       <p>

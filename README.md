@@ -1,6 +1,6 @@
 # LionLock FDE – Beta Source (1.0.0b2)
 
-**LionLock_FDE** scores LLM replies with fixed, deterministic rules and turns those scores into a gate decision. It also provides a tamper-evident local log to record those decisions in.
+**LionLock_FDE** scores LLM replies with fixed, deterministic rules and turns those scores into a gate decision. It also provides a hash-chained local log to record those decisions in.
 
 No AI model is involved in scoring or deciding: the same input always gives the same output. This is the **beta source** of open-source LionLock (version `1.0.0b2`), suitable for developers, researchers, and AI safety teams. Interfaces may change before 1.0.0. No premium modules or proprietary datasets are included.
 
@@ -10,9 +10,11 @@ No AI model is involved in scoring or deciding: the same input always gives the 
 
 - **Scores** a prompt and reply with lexical heuristics: repetition, low novelty, sentence structure, and drift from the prompt's words.
 - **Decides** a severity band (green, yellow, orange, red) and a suggested action (`ALLOW`, `REFRESH`, `BLOCK`), with the signal and reason that triggered it.
-- **Logs** decisions you record to a local, hash-chained SQLite file you can verify. Scoring and deciding do not write the log themselves; [`examples/quickstart.py`](examples/quickstart.py) shows the logging calls.
+- **Logs** decisions you record to a local, hash-chained SQLite file you can verify. Scoring and deciding do not write the log themselves; [`examples/quickstart.py`](examples/quickstart.py) shows the logging calls. The chain shows edited, reordered or removed rows. It cannot show that a whole log was rewritten unless you compare it with a copy of its latest hash kept somewhere the writer cannot change.
 
-LionLock **does not stop a model call by itself**: it returns a decision, and your code acts on it (see [`docs/GATING_POLICY.md`](docs/GATING_POLICY.md)). Its signals are text heuristics, not fact-checking: they catch loops and some structural problems but can miss a fluent, off-topic answer, and no accuracy figures have been published yet. The fatigue score is uncalibrated and never raises a decision on its own when its inputs are missing.
+LionLock **does not stop a model call by itself**: it returns a decision, and your code acts on it (see [`docs/GATING_POLICY.md`](docs/GATING_POLICY.md)). Its signals are text heuristics, not fact-checking: they catch loops and some structural problems but can miss a fluent, off-topic answer, and no accuracy figures have been published yet. The fatigue score is uncalibrated: LionLock does not claim to detect model fatigue, and the score is kept out of the decision when its inputs are missing.
+
+**Language support: English only.** Scoring in 1.0 is built and checked for English text. The tokenizer matches `[A-Za-z0-9']+`, so accented and non-Latin scripts score differently from English, and their decisions are not meaningful. Other languages are planned for later releases: first a Unicode-aware tokenizer, then per-language test sets, and a language will be listed as supported only once its own results are published.
 
 ---
 
@@ -24,8 +26,8 @@ Captures inbound signal data and emits trust records for analysis. Trust Overlay
 ### ✅ Module 02 – Signal Scoring Engine
 Computes deterministic signal scores from a prompt and response: repetition, novelty, sentence structure, and context adherence.
 
-### ✅ Module 03 – Drift & Fatigue Anomaly Detection
-Flags score patterns across turns, such as rising risk and decisions that disagree with their severity. The fatigue risk index is experimental and uncalibrated.
+### ✅ Module 03 – Drift and fatigue signals (experimental)
+Flags score patterns across turns, such as rising risk and decisions that disagree with their severity. The fatigue risk index is experimental and uncalibrated; it is a heuristic, not a fatigue detector.
 
 ### ✅ Module 04 – Telemetry Logging
 Logs decisions and trust records to a local, hash-chained SQLite file by default. Opt-in uploads send only allowlisted, pseudonymized fields to a receiver you run. SQL-backed telemetry remains available when explicitly enabled in config.
@@ -36,7 +38,7 @@ Computes deterministic gate decisions from trust signals. `gating.enabled` / `LI
 Re-evaluates logged decisions under a chosen policy to check missed signals, drift accumulation, and gate performance.
 
 ### ✅ Module 07 – Simulation Harness
-Stress-tests policies across multiple profiles and gating thresholds.
+Runs generated sessions through a policy to compare profiles and gating thresholds. The sessions are synthetic, so results show how the rules behave, not how any real model performs.
 
 ---
 
