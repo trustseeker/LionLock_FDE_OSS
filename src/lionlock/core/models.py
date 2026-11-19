@@ -82,3 +82,7 @@ class GateDecision:
     decision_risk_score: float
     trigger_signal: str
     signal_bundle: Dict[str, Any]
+    # Why the action differs from the default for ``severity`` (red BLOCK, orange and yellow
+    # REFRESH, green ALLOW): "warn_only_hallucination", "hard_gate_reason_disabled" or
+    # "gating_disabled". None when the action is the default. Severity itself is never rewritten.
+    policy_adjustment: str | None = None
