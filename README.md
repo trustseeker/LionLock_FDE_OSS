@@ -44,21 +44,21 @@ Runs generated sessions through a policy to compare profiles and gating threshol
 
 ## 🚀 Get Started
 
-**Release status checked 28 October 2026:** PyPI provides `1.0.0b1`; `1.0.0b2` is not yet
-published, so `pip install lionlock==1.0.0b2` currently fails. The b1 package lacks the privacy,
-receiver-security and SQLite data-preservation fixes in the [b2 changelog](CHANGELOG.md).
+**Release status checked 19 November 2026:** PyPI provides `1.0.0b1`; `1.0.0b2` is being
+released from the `v1.0.0b2` tag and is not on PyPI until [PyPI lists it](https://pypi.org/project/lionlock/#history).
+The b1 package lacks the fixes in the [b2 changelog](CHANGELOG.md).
 
-For external testing now, install the b2 source at the verified commit below. This requires
-Python 3.10+ and Git; use a fresh virtual environment. It installs the library and both commands
-(`lionlock-telemetry` and `lionlock-sim`):
+Until then, install the b2 source from its release tag. This requires Python 3.10+ and Git; use a
+fresh virtual environment. It installs the library and both commands (`lionlock-telemetry` and
+`lionlock-sim`):
 
 ```bash
-python -m pip install "lionlock @ git+https://github.com/trustseeker/LionLock_FDE_OSS.git@05434565c96a9534494110cf048caad804dc343d"
-python -c "from importlib.metadata import version; print(version('lionlock'))"
+python -m pip install "lionlock @ git+https://github.com/trustseeker/LionLock_FDE_OSS.git@v1.0.0b2"
+python -c "import lionlock; print(lionlock.__version__)"
 ```
 
 The version check should print `1.0.0b2`; this is a source installation, not evidence of a PyPI
-release. Once [PyPI lists b2](https://pypi.org/project/lionlock/#history), use:
+release. Release tags are never moved. Once [PyPI lists b2](https://pypi.org/project/lionlock/#history), use:
 
 ```bash
 python -m pip install --index-url https://pypi.org/simple lionlock==1.0.0b2

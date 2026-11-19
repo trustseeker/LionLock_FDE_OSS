@@ -2,14 +2,14 @@
 
 ## Current status
 
-On 28 October 2026, the PyPI JSON API listed only `1.0.0b1`. The b2 version endpoint returned
-404, and an uncached pip download from `https://pypi.org/simple` failed with
-`No matching distribution found for lionlock==1.0.0b2`. GitHub also listed only `v1.0.0b1`.
-A README version, a GitHub release and an installed source version do not prove PyPI availability.
+On 19 November 2026, the PyPI JSON API listed only `1.0.0b1`, and GitHub listed only
+`v1.0.0b1`. A README version, a GitHub release and an installed source version do not prove PyPI
+availability.
 
-The source at `05434565c96a9534494110cf048caad804dc343d` declares `1.0.0b2` and includes
-the fixes described in [CHANGELOG.md](../CHANGELOG.md). The [README](../README.md)
-provides an immutable source-install command while publication is pending.
+`1.0.0b2` is released from the commit that merges the release pull request, tagged `v1.0.0b2`;
+it includes everything in [CHANGELOG.md](../CHANGELOG.md). Until PyPI lists it, the
+[README](../README.md) installs that tag from source. An earlier pre-release source commit,
+`05434565`, also declared `1.0.0b2`; it lacks the November 2026 fixes and must not be used.
 
 ## Before creating the release
 
@@ -18,12 +18,16 @@ provides an immutable source-install command while publication is pending.
 2. Run `make setup` and `make verify CHANGED_SINCE=origin/main`. Require `RESULT: PASS`, and
    inspect skipped tests and the verification report. Do not refresh the harness lock, baselines
    or goldens to conceal a failure. The normal environment omits optional SQLAlchemy tests.
-3. In a separate clean build environment, install `build==1.6.1` and `twine`, then run
-   `python -m build` and `python -m twine check --strict dist/*`.
+3. In a separate clean build environment with the Python in `.python-version`, install
+   `build==1.6.1` and `twine==7.0.0`, then run `python scripts/reproducible_build.py dist` and
+   `python -m twine check --strict dist/*`. Record the sha256 of both files: the workflow builds
+   with the same script, so its artifact must have the same hashes. A plain `python -m build`
+   does not reproduce them.
 4. Confirm `pyproject.toml`, wheel and sdist metadata all declare `1.0.0b2`, both CLI entry
    points are present, and the intended tag is exactly `v1.0.0b2`.
 5. Install the built wheel in a fresh environment outside the checkout. Run `python -m pip check`,
-   the README scoring example, `lionlock-telemetry --help` and `lionlock-sim --help`. Check
+   `scripts/release_smoke.py 1.0.0b2` (the README scoring example and version checks),
+   `python -m lionlock.sample_data`, `lionlock-telemetry --help` and `lionlock-sim --help`. Check
    `importlib.metadata.version('lionlock')`. Use synthetic databases for preservation and receiver
    tests; never run release validation against a tester's existing telemetry data.
 6. Confirm the actual GitHub `pypi` environment still requires a maintainer reviewer, and that
