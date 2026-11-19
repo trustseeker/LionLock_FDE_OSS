@@ -99,7 +99,7 @@ because the gate is where the coercion happens.
   reply text end to end.
 - **R7 Invalid policy fails closed.** `evaluate_policy` raises `ValueError`, naming the setting, for:
   a weight that is not a finite number or is negative; an enabled signal name that is not a signal;
-  no enabled signal with a positive weight; thresholds missing `yellow`, `orange` or `red`, holding a
+  no enabled signal with a positive weight; enabled weights whose sum is not a finite number; thresholds missing `yellow`, `orange` or `red`, holding a
   value that is not finite, or not satisfying `0 <= yellow < orange < red <= 1`; and a
   `hallucination_mode` other than `"warn_only"` or `"block"`. `decide_gate` raises `ValueError` for
   the same thresholds and mode problems and for an `aggregate_score` that is not a finite number. An
@@ -147,6 +147,14 @@ Review of the implementation found that the first version of this spec contradic
 
 The oracle was changed first and the golden regenerated from it against the library as it was
 before LL-0002, as for the original golden. The implementation was changed after.
+
+## Revision after external review (20 November 2026)
+
+An external pre-release review found that each weight could be finite while their sum was not:
+two weights of `1e308` passed R7, their total overflowed to infinity, and the weighted mean became
+`finite / inf = 0.0`, so a reply that should be BLOCKed was ALLOWed. R7 now also refuses enabled
+weights whose sum is not finite, and the case is an acceptance test. The golden is unchanged: no
+product case uses such weights.
 
 ## How this is checked
 

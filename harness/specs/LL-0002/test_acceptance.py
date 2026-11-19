@@ -222,6 +222,9 @@ INVALID = {
     "misspelt mode": {"hallucination_mode": "warn_onyl"},
     "empty thresholds": {"thresholds": {}},
     "text weight": {"weights": {**DEFAULT_SIGNAL_WEIGHTS, "repetition_loopiness": "0.3"}},
+    "weights overflow when added": {
+        "weights": {"repetition_loopiness": 1e308, "context_adherence": 1e308}
+    },
 }
 
 

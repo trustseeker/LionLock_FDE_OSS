@@ -162,6 +162,12 @@ def _validate(
                 raise ValueError("enabled_signals")
     if not any(resolved.get(key, 0.0) > 0 for key in SIGNALS if enabled is None or key in enabled):
         raise ValueError("no enabled signal has a positive weight")
+    total = 0.0
+    for key in SIGNALS:
+        if enabled is None or key in enabled:
+            total += resolved.get(key, 0.0)
+    if not math.isfinite(total):
+        raise ValueError("weights total is not finite")
 
 
 def _before(

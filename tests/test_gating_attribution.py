@@ -159,3 +159,36 @@ def test_invalid_policy_is_refused_naming_the_setting(kwargs: dict, named: str) 
 def test_decide_gate_refuses_a_non_finite_aggregate(aggregate: float) -> None:
     with pytest.raises(ValueError, match="aggregate_score"):
         decide_gate(aggregate, SignalScores(**dict.fromkeys(SIGNALS, 0.0)))
+
+
+def test_weights_whose_sum_overflows_are_refused_not_turned_into_allow() -> None:
+    # External review: each weight is finite, their sum is inf, and finite / inf = 0.0 gave ALLOW.
+    bundle = _bundle(repetition=0.85, context=0.85, novelty=0.0, coherence=0.0, hallucination=0.0)
+    same_ratio = {"repetition_loopiness": 1.0, "context_adherence": 1.0}
+    assert evaluate_policy(bundle, weights=same_ratio).gating_decision == "BLOCK"
+    huge = {"repetition_loopiness": 1e308, "context_adherence": 1e308}
+    with pytest.raises(ValueError, match="add up"):
+        evaluate_policy(bundle, weights=huge)
+    # A single very large weight is fine: only its ratio to the others matters.
+    single = {"repetition_loopiness": 1e308, "context_adherence": 0.0}
+    assert evaluate_policy(bundle, weights=single).gating_decision == "BLOCK"
+
+
+def test_aggregate_score_refuses_an_overflowing_weight_total() -> None:
+    from lionlock.core.scoring import aggregate_score
+
+    bundle = _bundle(repetition=0.85, context=0.85)
+    with pytest.raises(ValueError, match="add up"):
+        aggregate_score(bundle, weights={"repetition_loopiness": 1e308, "context_adherence": 1e308})
+
+
+def test_config_refuses_weights_whose_sum_overflows(tmp_path) -> None:
+    from lionlock.config import load_config
+
+    path = tmp_path / "lionlock.toml"
+    path.write_text(
+        "[signals.weights]\nrepetition_loopiness = 1e308\ncontext_adherence = 1e308\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="finite number"):
+        load_config(str(path))

@@ -327,4 +327,7 @@ def aggregate_score(
         weight = weights.get(key, 0.0)
         weighted_sum += value * weight
         weight_total += weight
+    if not math.isfinite(weight_total):
+        # finite / inf would be 0.0: a silent "no risk". Refuse instead (fail closed).
+        raise ValueError("signal weights add up to more than a float can hold")
     return weighted_sum / weight_total if weight_total else 0.0

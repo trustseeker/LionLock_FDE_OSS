@@ -197,6 +197,18 @@ def _validate_policy(
             raise ValueError(f"enabled_signals names unknown signals {unknown}; known: {signals}")
     if not any(resolved.get(key, 0.0) > 0 for key in signals if enabled is None or key in enabled):
         raise ValueError("no enabled signal has a positive weight, so nothing could ever gate")
+    # Each weight can be finite while their sum is not: two weights of 1e308 add up to inf, and
+    # the weighted mean then becomes finite / inf = 0.0, which would turn a BLOCK into an ALLOW.
+    # Summed in the same order as aggregate_score.
+    total = 0.0
+    for key in signals:
+        if enabled is None or key in enabled:
+            total += resolved.get(key, 0.0)
+    if not math.isfinite(total):
+        raise ValueError(
+            "the enabled signals' weights add up to more than a float can hold; "
+            "scale them down (only their ratios matter)"
+        )
 
 
 def _validate_evidence(signal_scores: SignalScores, derived_signals: DerivedSignals) -> None:

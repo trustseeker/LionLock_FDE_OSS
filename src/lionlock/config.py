@@ -327,6 +327,16 @@ def policy_config_problems(config: Mapping[str, Any]) -> List[str]:
                 {"enabled": effective_enabled, "weights": dict(effective_weights)},
                 "at least one enabled signal must have a weight > 0",
             )
+        total = 0.0
+        for name in KNOWN_SIGNALS:
+            if name in effective_enabled:
+                total += float(effective_weights.get(name, 0.0))
+        if not math.isfinite(total):
+            problem(
+                "signals.weights",
+                dict(effective_weights),
+                "the enabled weights must add up to a finite number (scale them down)",
+            )
     return problems
 
 
