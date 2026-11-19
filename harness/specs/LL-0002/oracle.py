@@ -234,36 +234,53 @@ def _d1(
     }
     trigger = _pick(derived_map) if derived_channel >= raw else _pick(contributions)
 
-    action = DEFAULT_ACTION[severity]
-    adjustment = None
-    if severity == "red" and mode == "warn_only":
+    def restricted(allowed: Callable[[str], bool]) -> tuple[bool, str]:
+        """R4/R5: is the reply still red using only the allowed evidence, and what drives it?
+
+        The weighted mean uses the scores as given (finite, not clamped one by one) and is
+        clamped afterwards, the same arithmetic as the raw channel.
+        """
         weighted = 0.0
         total = 0.0
         for key in enabled_keys:
-            if key == "hallucination_risk":
+            if not allowed(key):
                 continue
             weight = resolved_weights.get(key, 0.0)
-            weighted += safe_scores[key] * weight
+            weighted += float(scores[key]) * weight
             total += weight
-        non_raw = _unit(weighted / total if total else 0.0)
-        non_derived = {k: v for k, v in derived_map.items() if k not in HALLUCINATION_EVIDENCE}
-        non_derived_channel = max(non_derived.values()) if non_derived else 0.0
-        if _band(_clamp(max(non_raw, non_derived_channel)), resolved) == "red":
-            non_contributions = {
-                k: v for k, v in contributions.items() if k not in HALLUCINATION_EVIDENCE
-            }
-            if non_derived_channel >= non_raw:
-                trigger = _pick(non_derived)
-            else:
-                trigger = _pick(non_contributions)
+        sub_raw = _unit(weighted / total if total else 0.0)
+        sub_derived = {k: v for k, v in derived_map.items() if allowed(k)}
+        sub_derived_channel = max(sub_derived.values()) if sub_derived else 0.0
+        is_red = _band(_clamp(max(sub_raw, sub_derived_channel)), resolved) == "red"
+        if sub_derived_channel >= sub_raw:
+            return is_red, _pick(sub_derived)
+        return is_red, _pick({k: v for k, v in contributions.items() if allowed(k)})
+
+    action = DEFAULT_ACTION[severity]
+    adjustment = None
+    if severity == "red" and mode == "warn_only":
+        still_red, driver = restricted(lambda key: key not in HALLUCINATION_EVIDENCE)
+        if still_red:
+            trigger = driver
         else:
             action = "REFRESH"
             adjustment = "warn_only_hallucination"
             trigger = "low_conf_halluc" if derived_channel >= raw else "hallucination_risk"
+    if action == "BLOCK" and hard_gate is not None:
+        listed = set(hard_gate)
+
+        def allowed(key: str) -> bool:
+            if mode == "warn_only" and key in HALLUCINATION_EVIDENCE:
+                return False
+            return REASON_CODE_MAP.get(key, "policy_violation") in listed
+
+        still_red, driver = restricted(allowed)
+        if still_red:
+            trigger = driver
+        else:
+            action = "REFRESH"
+            adjustment = "hard_gate_reason_disabled"
     reason = REASON_CODE_MAP.get(trigger, "policy_violation")
-    if action == "BLOCK" and hard_gate is not None and reason not in set(hard_gate):
-        action = "REFRESH"
-        adjustment = "hard_gate_reason_disabled"
     if not gating_enabled and action != "ALLOW":
         action = "ALLOW"
         adjustment = "gating_disabled"

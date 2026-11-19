@@ -156,7 +156,10 @@ def test_r5_adjustment_is_explicit(product: dict[str, Any]) -> None:
         )
 
 
-@pytest.mark.parametrize("policy", ["default", "block_mode", "hallucination_weighted"])
+@pytest.mark.parametrize(
+    "policy",
+    ["default", "block_mode", "hallucination_weighted", "repetition_not_hard_gated"],
+)
 def test_r6_raising_any_evidence_never_lowers_the_action(product_module: Any, policy: str) -> None:
     kwargs = product_module.POLICIES[policy]
     levels = (0.0, 0.3, 0.6, 0.9)
@@ -179,6 +182,32 @@ def test_r6_raising_any_evidence_never_lowers_the_action(product_module: Any, po
                 assert action(scores, higher_low[0]) >= here, (policy, scores, low, "low_conf")
 
 
+def test_r5_more_evidence_cannot_lift_a_hard_gated_block() -> None:
+    # Found in review: a tie flipped the winning reason to an unlisted one.
+    weights = {"repetition_loopiness": 1.0, "context_adherence": 1.0}
+    kwargs = {
+        "weights": weights,
+        "hallucination_mode": "block",
+        "hard_gate_reasons_enabled": ["repetition_loop"],
+    }
+    for context in (0.8, 1.0):
+        scores = {**dict.fromkeys(SIGNALS, 0.0), "repetition_loopiness": 1.0}
+        scores["context_adherence"] = context
+        decision = evaluate_policy(_bundle(scores, low_conf=0.0), **kwargs)
+        assert decision.gating_decision == "BLOCK", context
+        assert decision.reason_code == "repetition_loop", context
+
+
+def test_r4_out_of_range_scores_are_averaged_before_clamping() -> None:
+    # Found in review: clamping each score first made a red reply look "not red without
+    # hallucination evidence" even though hallucination carried no weight.
+    scores = {**dict.fromkeys(SIGNALS, 0.0), "repetition_loopiness": 1.8}
+    weights = {"repetition_loopiness": 1.0, "context_adherence": 1.0}
+    decision = evaluate_policy(_bundle(scores, low_conf=0.0), weights=weights)
+    assert (decision.severity, decision.gating_decision) == ("red", "BLOCK")
+    assert decision.policy_adjustment is None
+
+
 INVALID = {
     "nan weight": {"weights": {**DEFAULT_SIGNAL_WEIGHTS, "repetition_loopiness": math.nan}},
     "infinite weight": {"weights": {**DEFAULT_SIGNAL_WEIGHTS, "repetition_loopiness": math.inf}},
@@ -191,6 +220,8 @@ INVALID = {
     "nan red": {"thresholds": {"yellow": 0.45, "orange": 0.65, "red": math.nan}},
     "red above one": {"thresholds": {"yellow": 0.45, "orange": 0.65, "red": 1.5}},
     "misspelt mode": {"hallucination_mode": "warn_onyl"},
+    "empty thresholds": {"thresholds": {}},
+    "text weight": {"weights": {**DEFAULT_SIGNAL_WEIGHTS, "repetition_loopiness": "0.3"}},
 }
 
 
