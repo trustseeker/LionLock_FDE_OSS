@@ -49,6 +49,11 @@ Compatibility notes before upgrading.**
 - **New log files and the token file could be read by other users.** They are now created owner
   only (files 0600, directories 0700). Trust Overlay records no longer hold an unsalted hash of the
   reply or of the hostname, nor free-text notes; `response_hash` is keyed with the configured salt.
+- **SQL writers mishandled two database errors.** A MySQL/MariaDB duplicate entry (error 1062)
+  was not recognised as a duplicate, and two PostgreSQL writers starting together on a table that
+  still needed its idempotency key could fail with "already exists". 1062 is now a duplicate
+  (SQLSTATE 23000 alone never is), and the PostgreSQL upgrade takes a table lock first. Neither was
+  tested against a real server.
 - **The receiver could be worked around or held up.** A second `Authorization` header could dodge
   the per-token rate limit (now 400); one partner could upload for another's install (now 403);
   slow clients could hold connections indefinitely (now a 60 s deadline and a 32-connection cap);
@@ -136,6 +141,8 @@ Compatibility notes before upgrading.**
 - `lionlock-sim --append-run` ids are `<id>-<n>`; the sim report gains an `inputs` block marking its
   sessions as synthetic, and coverage keys are renamed `*_input_high`.
 - Validation errors no longer echo their input. Pydantic is no longer used at runtime.
+- Optional SQLAlchemy is imported only when a SQLAlchemy code path runs, so importing the SQL
+  sinks, readers or simulator no longer loads it.
 - The package description now says what LionLock does and does not claim.
 - **The SQL sinks no longer give up on a COMMIT with an unknown outcome.** Each stored row now
   carries an idempotency key, `(writer_id, writer_seq)`, with a UNIQUE index on it, so such a
