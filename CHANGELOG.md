@@ -28,6 +28,8 @@ Compatibility notes before upgrading.**
   Invalid modes, thresholds, weights and enabled signals, and non-finite scores, are now refused
   with an error that names the setting, both in `evaluate_policy` and when a config is loaded.
   The trust overlay no longer reports a non-finite risk as TRUSTED.
+  Weights that are each finite but add up to more than a float can hold (for example two
+  weights of `1e308`, which turned a BLOCK into an ALLOW with risk 0.0) are refused too.
 - **Replay used the shell's `LIONLOCK_GATING_ENABLED`, and replay and the simulator used default
   weights.** Replay now uses only the recorded policy, and both pass the policy's weights and
   enabled signals to the gate. A malformed `policies.toml` entry is an error rather than a silent
