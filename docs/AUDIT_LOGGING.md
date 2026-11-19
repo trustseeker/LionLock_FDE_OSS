@@ -52,10 +52,12 @@ previously with named-column inserts. This can turn startup into a `RuntimeError
 `get_writer`. Review customized schemas and backups before upgrading; initialization does not
 remove those columns or their data to make the schema fit.
 
-The supported older layout is the initial OSS signals schema, which has `event_pk` and
-`session_pk` but lacks `auth_token_id` and `auth_signature`. It is upgraded by adding those two
-nullable columns, preserving the existing rows and keys. Initialization never rebuilds, drops
-or renames a table. Unknown layouts, including unkeyed partial tables, need a separately reviewed
+The supported older layouts are the initial OSS signals schema, which has `event_pk` and
+`session_pk` but lacks `auth_token_id` and `auth_signature`, and the schema with those two columns
+but without the writer key (`writer_id`, `writer_seq`; see "Idempotency keys" below). Each is
+upgraded by adding the nullable columns it lacks and the writer key's UNIQUE index, preserving
+the existing rows, keys, indexes and triggers. Initialization also creates the
+`lionlock_sql_writers` table. Initialization never rebuilds, drops or renames a table. Unknown layouts, including unkeyed partial tables, need a separately reviewed
 manual migration. A leftover `lionlock_signals_v2` table is left untouched, even if the original
 signals table is absent; initialization does not recover its rows automatically.
 
@@ -78,7 +80,8 @@ unhandled telemetry startup errors can interrupt a caller even though scoring/ga
 
 This preservation guard applies to the native `sqlite:///...` path. SQLAlchemy URI forms such as
 `sqlite+pysqlite:///...`, PostgreSQL, and the separate Trust Overlay/Module 04 schema initializers
-retain their existing behavior and are outside this guard. Existing production databases are not
+retain their existing behavior and are outside this guard, apart from the writer key upgrade
+described under "Idempotency keys". Existing production databases are not
 migrated by installing this code; initialization runs only when invoked.
 Relative file paths remain supported. `:memory:` initialization remains ephemeral; sessions and
 failsafe writes do not report those connection-local records as persisted across calls.
@@ -101,13 +104,18 @@ one delivery policy, `src/lionlock/utils/sql_batch_writer.py`:
   connections are retried up to `max_retries` times with exponential backoff: `retry_backoff_ms`,
   doubling per retry, capped at 2 s, with no jitter. Write errors never disable the writer and
   never raise into `log_event()` or `append_trust_record()`.
-- **No write is stored twice.** A write is retried only when it is known to have stored nothing.
-  If the COMMIT itself fails without a known outcome, for example because the connection was
-  lost, the rows may already be stored, so the write is not retried and its events are counted
-  as `in_doubt`.
+- **No write is stored twice.** Every event carries an idempotency key, and a UNIQUE index on
+  it lets the database itself refuse a second copy. If a COMMIT fails without a known outcome,
+  for example because the connection was lost, the writer looks up which of the batch's keys are
+  already stored, counts those events as `written` (and `reconciled`), and inserts only the rest.
+  Events are counted as `in_doubt` only if the outcome is still unknown when the retries run out.
 - **One bad row cannot sink its batch.** A non-transient batch error, such as a UNIQUE violation,
   rolls the batch back and re-inserts it row by row. True duplicates are skipped and counted as
   `duplicates`, other constraint failures are counted as `failed`, and every other row is written.
+- **A duplicate is confirmed, not assumed.** `duplicates` means "already stored", so a UNIQUE
+  violation counts as one only after the writer has looked up the event's own key and found it
+  free: another UNIQUE constraint on the table refused the row. If the key itself is taken, see
+  "Key collisions" below. If the lookup fails, the event is counted as `failed`.
 - **Overflow is reported.** When the queue (`max(100, 10 * batch_size)` events) is full, the
   oldest queued event is evicted to keep the newest data. Each eviction is counted as
   `dropped_queue_full` and logged as a warning at the 1st, 2nd, 4th, 8th, ... drop.
@@ -123,9 +131,75 @@ Read the counters with `lionlock.logging.sql_telemetry.writer_stats()` or
 `lionlock.trust_overlay.sql_sink.writer_stats()`. `stop_writer()` returns the counters when it
 returns; they are final unless `pending` is non-zero, which means a write was still running at the
 deadline. That write is not interrupted, and its outcome is logged as `sql_sink_late_outcome` when
-it finishes. `writer.last_error` holds the most recent write error without data values: the error
+it finishes. `reconciled` counts events whose COMMIT had an unknown outcome and that a later
+lookup found already stored; they are also counted as `written`. `key_collisions` counts events
+refused because another writer had stored a row under the same key; they are also counted as
+`failed`. `writer.last_error` holds the most recent write error without data values: the error
 type, its SQLite or SQLSTATE code when available, and the first line of the driver message cut at
 the first quote.
+
+### Idempotency keys
+
+Each row a sink stores carries `(writer_id, writer_seq)`, and each sink table has a UNIQUE index
+on that pair, named `<table>_writer_key`. No randomness is involved:
+
+- `writer_id` is claimed once per writer when it starts: one above the highest id recorded in
+  `lionlock_sql_writers` (`writer_id`, `sink`, `started_utc`) and in the sink's own table,
+  inserted under the writers table's PRIMARY KEY, so two writers never share one. Reading the
+  sink table too means a writers table that was emptied, dropped or restored from an older backup
+  cannot hand out an id whose keys are already stored. In PostgreSQL the claim locks the writers
+  table briefly, so writers starting together claim in turn.
+- `writer_seq` counts the writer's accepted events from 1 and is assigned when an event is
+  queued, so an event evicted from a full queue leaves a gap. For each writer, the stored
+  sequence numbers are those of its `written` events plus any `in_doubt` events that did reach
+  the table; every other sequence number is a `dropped`, `failed` or `duplicates` event. The
+  one exception is a reported key collision (below), where another writer's row occupies the
+  key of an event this writer counted as `failed`.
+
+The UNIQUE index also covers a PostgreSQL COMMIT that is still finishing when its keys are looked
+up: the re-insert then fails on the key instead of storing a second copy, and the keys are looked
+up again.
+
+Existing tables are upgraded when a writer starts (or `init_db` runs): the two nullable columns
+are added and the index is built. Rows stored before the upgrade keep NULL keys, which a UNIQUE
+index never treats as equal. Building the index reads the whole table once, so the first start
+after upgrading takes longer on a large table, and it needs the database privileges to alter the
+table and create the index and the writers table. A Trust Overlay table that lacks any of the
+sink's own columns, or has only one of the two key columns, is refused rather than altered, as is
+an existing index named `<table>_writer_key` that is not a unique index on exactly the key.
+
+**Key collisions.** Outside reconciliation a writer has never stored the events it is writing, so
+its own key can be taken only if another writer holds the same id: for example the writers table
+was emptied while a writer that had not yet stored anything was running, and a new writer claimed
+the same id. The database refuses the second row, so nothing is overwritten, but the refused event
+is not stored. It is counted as `failed` and `key_collisions`, `last_error` starts with
+`writer key collision`, and `sql_sink_writer_key_collision` is logged at ERROR level at the 1st,
+2nd, 4th, 8th, ... collision. Restart the writer so it claims a fresh id.
+
+### Going back to an earlier release
+
+The upgrade is one-way for the native SQLite telemetry tables (`sqlite:///...`). Earlier code that
+checks the telemetry schema but predates the writer key, which includes the source the README
+currently pins for 1.0.0b2, refuses to start on an upgraded `lionlock_signals` with
+`Incompatible SQL telemetry schema: lionlock_signals`. 1.0.0b1 does not check the schema and keeps
+working. Trust Overlay tables, and telemetry tables reached through SQLAlchemy, keep working with
+earlier releases: those name their columns on insert and leave the nullable key columns NULL.
+
+To return a native SQLite telemetry database to the layout earlier code accepts, stop every
+writer, back the file up, and run this (SQLite 3.35 or newer):
+
+<!-- rollback-sql: tests/test_sql_telemetry_preservation.py runs this block as written -->
+```sql
+BEGIN IMMEDIATE;
+DROP INDEX lionlock_signals_writer_key;
+ALTER TABLE lionlock_signals DROP COLUMN writer_seq;
+ALTER TABLE lionlock_signals DROP COLUMN writer_id;
+COMMIT;
+```
+
+This discards the keys of rows written since the upgrade; the rows themselves are kept.
+`lionlock_sql_writers` can stay: earlier code ignores it, and a later upgrade claims ids above
+the ones it records.
 
 Optional keys, accepted by both `[logging_sql]` and `[trust_overlay.sql]`:
 
