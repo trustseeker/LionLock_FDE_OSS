@@ -160,7 +160,7 @@
         "string",
         "null"
       ],
-      "description": "Optional response hash."
+      "description": "Optional response hash. How it was made is given by hash_scheme; in records without hash_scheme it may be an unkeyed SHA-256 of the reply."
     },
     "pseudonymous_user_key": {
       "type": [
@@ -168,6 +168,15 @@
         "null"
       ],
       "description": "Optional pseudonymous user key."
+    },
+    "hash_scheme": {
+      "type": "string",
+      "enum": [
+        "keyed-v1",
+        "caller",
+        "none"
+      ],
+      "description": "Hashing rules of the record. keyed-v1: response_hash is HMAC-SHA256 of the reply under a key derived from the configured salt; caller: response_hash was supplied by the caller and stored as given; none: no response_hash. Records with this field hold no unkeyed hostname or container digests. Absent in records written before it existed."
     }
   },
   "required": [

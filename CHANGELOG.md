@@ -37,6 +37,21 @@ From a full review of `src/` after the move to fully open source. Each fix has a
 - Per-event SQL telemetry no longer rebuilds the token verifier (and its database connection) or
   re-reads `.env` for every event.
 
+### Changed
+
+- **The SQL sinks no longer give up on a COMMIT with an unknown outcome.** Each stored row now
+  carries an idempotency key, `(writer_id, writer_seq)`, with a UNIQUE index on it, so such a
+  write is retried safely: the writer looks up which of the batch's keys are already stored and
+  inserts only the rest. Events are counted as `in_doubt` only when the outcome is still unknown
+  after the retries. Writer ids are assigned by the database, so the keys involve no randomness.
+  A new `reconciled` counter reports events found already stored.
+- **A writer id is never reused, and a key collision is never reported as a duplicate.** The next
+  id is claimed above every id in both the writers table and the sink table, so emptying or
+  dropping `lionlock_sql_writers` cannot make new events collide with stored ones. A UNIQUE
+  violation is counted as `duplicates` only after a lookup confirms the event's own key is free;
+  if another writer holds the key, the event is counted as `failed` and `key_collisions` and
+  logged at ERROR level.
+
 ### Compatibility
 
 - The database host and port no longer fall back to the generic `HOST` and `PORT` variables; set
@@ -53,6 +68,17 @@ From a full review of `src/` after the move to fully open source. Each fix has a
   `insecure_endpoint_for_api_key`; use https.
 - A `TrustVaultLogger` file whose last line is damaged must be inspected (and repaired) before new
   entries can be written.
+- The SQL telemetry and Trust Overlay tables gain two nullable columns, `writer_id` and
+  `writer_seq`, and a UNIQUE index on them; a new `lionlock_sql_writers` table records each
+  writer. Existing tables are upgraded in place the first time a writer starts, keeping their
+  rows (with NULL keys). This needs privileges to alter the table and create the index, and
+  building the index takes one pass over a large table. A Trust Overlay table missing any of the
+  sink's columns is now refused at startup instead of failing every insert.
+- **The upgrade is one-way for native SQLite telemetry databases.** Earlier code that checks the
+  telemetry schema, including the source the README currently pins for 1.0.0b2, refuses an
+  upgraded `lionlock_signals`. 1.0.0b1, Trust Overlay tables and telemetry through SQLAlchemy keep
+  working. `docs/AUDIT_LOGGING.md` ("Going back to an earlier release") gives the tested SQL that
+  restores the earlier layout.
 
 ## 1.0.0b2 — security and data-preservation fixes
 

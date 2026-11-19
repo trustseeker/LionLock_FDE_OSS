@@ -70,31 +70,49 @@ def test_module07_standard_determinism(tmp_path: Path) -> None:
 
     assert report_first["missed"]["rate"] <= 0.05
     assert report_first["missed"]["count"] >= 1
-    assert report_first["coverage"]["fatigue_high"] is True
-    assert report_first["coverage"]["low_conf_halluc"] is True
-    assert report_first["coverage"]["congestion_high"] is True
+    # Coverage describes the synthetic inputs fed to gating. The fatigue values here are hand-built
+    # and beyond anything the scorer produces, so this is not a claim about fatigue detection.
+    assert report_first["inputs"]["origin"] == "synthetic"
+    assert report_first["inputs"]["produced_by_scorer"] is False
+    assert report_first["coverage"]["basis"] == "synthetic_inputs"
+    assert report_first["coverage"]["fatigue_input_high"] is True
+    assert report_first["coverage"]["low_conf_halluc_input_high"] is True
+    assert report_first["coverage"]["congestion_input_high"] is True
     assert report_first["coverage"]["expected_block"] is True
+    assert "fatigue_high" not in report_first["coverage"]
     assert refresh_count_1 >= 1 and refresh_count_2 >= 1
     assert warn_count_1 == 0 and warn_count_2 == 0
 
 
-def test_offline_fallback_selects_sqlite(monkeypatch) -> None:
-    def _fail_connect(uri: str, *, timeout_s: float = 1.0) -> None:
-        raise RuntimeError("connect failed")
+def test_no_database_is_an_error_not_a_probe_or_a_fallback(monkeypatch) -> None:
+    """Without --db or LIONLOCK_DB_URL there is nothing to resolve, and nothing is guessed.
 
-    def _offline(*, timeout_s: float = 0.3) -> bool:
-        return True
+    This replaces a test of the old offline fallback, which decided between Postgres and SQLite by
+    opening connections to public DNS resolvers. test_sim_offline.py proves no socket is used.
+    """
 
-    monkeypatch.setattr(runner, "_test_postgres_connection", _fail_connect)
-    monkeypatch.setattr(runner, "_detect_offline", _offline)
+    def _unexpected(uri: str, *, timeout_s: float = 1.0) -> None:  # pragma: no cover
+        raise AssertionError("no Postgres connection may be attempted without a configured DSN")
 
-    target = runner._resolve_db_target(
-        explicit_db=None,
-        env_db=None,
-        schema_override=None,
+    monkeypatch.setattr(runner, "_test_postgres_connection", _unexpected)
+    assert not hasattr(runner, "_detect_offline")
+    try:
+        runner._resolve_db_target(explicit_db=None, env_db=None, schema_override=None)
+    except RuntimeError as exc:
+        assert "--db" in str(exc)
+        assert "LIONLOCK_DB_URL" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("an unconfigured database must be an error")
+
+
+def test_explicit_sqlite_target_is_used_as_given(tmp_path: Path) -> None:
+    uri = f"sqlite:///{tmp_path / 'explicit.db'}"
+    target = runner._resolve_db_target(explicit_db=uri, env_db=None, schema_override=None)
+    assert (target.uri, target.engine, target.db_source, target.schema) == (
+        uri,
+        "sqlite",
+        "cli",
+        "main",
     )
-    assert target.engine == "sqlite"
-    assert target.db_source == "offline_fallback"
-    assert target.offline_fallback_engaged is True
-    assert target.schema == "main"
-    assert target.uri.startswith("sqlite:///")
+    env_target = runner._resolve_db_target(explicit_db=None, env_db=uri, schema_override=None)
+    assert env_target.db_source == "env"

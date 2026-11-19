@@ -86,3 +86,21 @@ files changed: <list>
 requirements: R1 <ok> R2 <ok> R3 <ok> R4 <ok> R5 <ok> R6 <ok> R7 <ok>
 notes: <anything the spec did not anticipate>
 ```
+
+## Re-baselined for LL-0002 (18 November 2026)
+
+The owner's decision D1 (spec LL-0002) stops policy from rewriting `severity`: a red decision that
+`warn_only` softens now reports severity `red` with action `REFRESH`, where it used to report
+`orange`. LL-0001's product records severity, so its golden was re-baselined by the maintainer
+before the D1 implementation existed:
+
+- `oracle.py`'s decision rule was updated to D1. Its SE-0.4.0 rule is unchanged.
+- The new expected product was checked against LL-0002's independent oracle on all 17 cases.
+- Exactly four values changed: severity `orange` to `red` in `evaluate_policy` and `decide_gate`
+  for `05-fragments-no-metadata` and `12-fragments-entropy-and-drift`. Their action stays
+  `REFRESH`; triggers, reasons and every signal value are unchanged, so R1-R5 and R7 still hold.
+- The replaced expectation (fingerprint `af1f476d6f45`) is kept as `baseline` in `golden.json`.
+
+`make golden SPEC=LL-0001` cannot regenerate this golden, because the library has applied the
+SE-0.4.0 rule since LL-0001 was completed, so the oracle's rule-off mirror no longer matches it.
+That was already true before this re-baseline.

@@ -51,9 +51,25 @@ processes. There is no background thread, and nothing is buffered that could be 
 
 Each table is an append-only hash chain: every row stores the SHA-256 of its contents together
 with the previous row's hash. `lionlock-telemetry verify` recomputes the chain and reports the
-first row that was edited, reordered, or deleted. Pruning records the hash of the last removed
-row, so the retained window stays verifiable. Like any self-contained hash chain, this cannot
-detect rows removed from the end of the file. The file is kept owner-only: its mode is set when
+first row that was edited, reordered, or deleted. Pruning records the hash and sequence number of
+the last removed row (the prune anchor), so the retained window stays verifiable, and `verify`
+reports how far the store itself has pruned (`pruned_through`). It also checks that the rows run
+without gaps from the anchor to the last row, and that the last row is the highest sequence number
+SQLite ever issued for the table, so rows deleted from either end with plain SQL are reported.
+
+**Those checks are not proof.** Anyone who can write the file can delete rows and also rewrite the
+anchor, the sequence counter and every hash so that all of them agree; no check inside the file
+can tell that from an honest log. Detecting a rewritten or truncated history needs a trusted,
+independent reference: a head recorded somewhere the log's writer cannot change, such as another
+machine, a write-once store or a signed ticket. `lionlock-telemetry head` prints each table's
+head (rows retained, last sequence number, last row hash); keep that output elsewhere, and later
+run `lionlock-telemetry verify --expected-head FILE`, which fails unless each recorded head row is
+still in the chain with the same hash. A recorded head protects the history up to and including
+that row; rows added after it are protected only by a later head recorded the same way. A log
+that has grown since still verifies. If pruning has since removed the recorded head row, verification still succeeds while that row is the prune anchor and the anchor's hash matches; once pruning moves past it, the head can no longer be confirmed and verification fails with a reason saying so, so record heads more often than every `logging.sqlite_max_rows` rows.
+From Python: `LogStore.head(table)`, `LogStore.heads()` and `LogStore.verify(expected_head=...)`.
+
+The file is kept owner-only: its mode is set when
 it is first opened in a process and re-checked on later writes, and a failure to set it is
 reported as an error. Deleted rows are overwritten (`secure_delete`). LionLock writes only to its
 own log: a database without LionLock's application id is used only if it is completely empty
@@ -111,9 +127,15 @@ schedule `lionlock-telemetry upload` with cron or a systemd timer.
 ```bash
 lionlock-telemetry status                       # log location, row counts, upload state
 lionlock-telemetry verify                       # check the hash chains
+lionlock-telemetry head > /elsewhere/heads.json # record the heads where the writer cannot change them
+lionlock-telemetry verify --expected-head /elsewhere/heads.json  # ...and later check against them
 lionlock-telemetry preview --rows 3             # build the next upload without consuming it
 lionlock-telemetry inspect logs/preview/lionlock-*.db
 ```
+
+`verify` exits 0 when every table verifies, 1 when any check fails, and 2 when the
+`--expected-head` file cannot be read (`-` reads it from stdin). Its output gives each table's
+`head` and `pruned_through`.
 
 `preview` writes exactly the snapshot the next upload would send and prints its metadata and
 sample rows, after running the same validation as the receiver. It changes no export state: the
@@ -483,7 +505,7 @@ The command prints a JSON summary of the rows and jobs it loaded, and exits non-
 | A partner uploads for another partner's install (install squatting) | With tokens, each install is bound to the token that first uploads for it, and other tokens get `403`, which the genuine client keeps in its outbox instead of setting aside. First come, first served: an install not yet bound can be claimed by whoever uses its id first. Not prevented without tokens |
 | Slow clients hold connections or upload slots | A 60 s deadline for the whole request, a 30 s idle limit per read or write, at most 32 connections (`503` beyond) and 4 uploads at once; a client that keeps reconnecting can still occupy them, so limit connections per client at the reverse proxy |
 | A request writes control characters into the receiver log | They are escaped, as the standard library does; client addresses are never logged |
-| Local log tampering | Per-table hash chains and `lionlock-telemetry verify` |
+| Local log tampering | Per-table hash chains and `lionlock-telemetry verify` catch edits and plain-SQL deletions; a truncated or rewritten history is caught only against a head kept elsewhere (`verify --expected-head`) |
 | Receiver compromise | Data minimization limits what an attacker can obtain |
 
 ## Determinism and verification

@@ -29,6 +29,7 @@ from lionlock.core.gating import (
 )
 from lionlock.core.models import SignalScores
 from lionlock.core.scoring import (
+    DEFAULT_SIGNAL_WEIGHTS,
     SIGNAL_SCHEMA_VERSION,
     aggregate_score,
     low_conf_halluc_score,
@@ -133,23 +134,51 @@ def _decide(
     derived_channel = max(derived_risk_map.values()) if derived_risk_map else 0.0
     decision_risk_score = _clamp(max(raw_channel, derived_channel))
 
+    # Decision rule as re-baselined for LL-0002 (decision D1), with the defaults product.py uses:
+    # hallucination_mode "warn_only", default weights, every signal enabled, no hard-gate list.
+    # Severity is the band and is never rewritten; the raw-channel trigger is the signal with the
+    # largest weighted contribution; warn_only softens only a red that hallucination evidence alone
+    # makes red. See harness/specs/LL-0002/SPEC.md.
     severity = _severity_band(decision_risk_score)
+    contributions = {
+        key: DEFAULT_SIGNAL_WEIGHTS.get(key, 0.0) * value
+        for key, value in safe_scores.items()
+        if DEFAULT_SIGNAL_WEIGHTS.get(key, 0.0) > 0
+    }
     if derived_channel >= raw_channel:
         trigger_signal = _pick_by_order(derived_risk_map, TRIGGER_SIGNAL_ORDER)
     else:
-        trigger_signal = _pick_by_order(safe_scores, TRIGGER_SIGNAL_ORDER)
-    reason_code = REASON_CODE_MAP.get(trigger_signal, "policy_violation")
+        trigger_signal = _pick_by_order(contributions, TRIGGER_SIGNAL_ORDER)
 
-    # hallucination_mode defaults to warn_only and hard_gate_reasons_enabled to None, which is how
-    # product.py calls the library.
-    if severity == "red" and reason_code == "hallucination_risk":
-        severity = "orange"
-
-    gating_decision = "ALLOW"
+    gating_decision = {"red": "BLOCK", "orange": "REFRESH", "yellow": "REFRESH"}.get(
+        severity, "ALLOW"
+    )
     if severity == "red":
-        gating_decision = "BLOCK"
-    elif severity in ("yellow", "orange"):
-        gating_decision = "REFRESH"
+        weighted = 0.0
+        total = 0.0
+        for key, value in safe_scores.items():
+            if key == "hallucination_risk":
+                continue
+            weight = DEFAULT_SIGNAL_WEIGHTS.get(key, 0.0)
+            weighted += value * weight
+            total += weight
+        non_raw = _safe_unit_interval(weighted / total if total else 0.0)
+        non_derived = {k: v for k, v in derived_risk_map.items() if k != "low_conf_halluc"}
+        non_derived_channel = max(non_derived.values()) if non_derived else 0.0
+        if _severity_band(_clamp(max(non_raw, non_derived_channel))) == "red":
+            if non_derived_channel >= non_raw:
+                trigger_signal = _pick_by_order(non_derived, TRIGGER_SIGNAL_ORDER)
+            else:
+                trigger_signal = _pick_by_order(
+                    {k: v for k, v in contributions.items() if k != "hallucination_risk"},
+                    TRIGGER_SIGNAL_ORDER,
+                )
+        else:
+            gating_decision = "REFRESH"
+            trigger_signal = (
+                "low_conf_halluc" if derived_channel >= raw_channel else "hallucination_risk"
+            )
+    reason_code = REASON_CODE_MAP.get(trigger_signal, "policy_violation")
 
     return {
         "decision_risk_score": decision_risk_score,
