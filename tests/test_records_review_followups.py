@@ -60,7 +60,7 @@ def test_an_explicit_null_hash_scheme_is_rejected(monkeypatch) -> None:
         validate_trust_record(record)
 
 
-@pytest.mark.parametrize("bad", ["invalid", "\u00b2"])
+@pytest.mark.parametrize("bad", ["invalid", "\u00b2", "1" * 5000])
 def test_a_malformed_sequence_counter_fails_verification(tmp_path: Path, bad: str) -> None:
     path = tmp_path / "lionlock.db"
     store = LogStore(path)
@@ -88,4 +88,21 @@ def test_a_superscript_prune_anchor_fails_verification(tmp_path: Path) -> None:
     status = reopened.verify()["events"]
     assert status.ok is False
     assert "anchor_seq" in status.reason
+    reopened.head("events")  # no crash
+
+
+def test_an_overlong_prune_anchor_fails_verification(tmp_path: Path) -> None:
+    path = tmp_path / "lionlock.db"
+    store = LogStore(path)
+    store.append_event(_EVENT)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO log_meta(key, value) VALUES ('anchor:events', ?)", ("0" * 64,)
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO log_meta(key, value) VALUES ('anchor_seq:events', ?)",
+            ("1" * 5000,),
+        )
+    reopened = LogStore(path)
+    assert reopened.verify()["events"].ok is False
     reopened.head("events")  # no crash

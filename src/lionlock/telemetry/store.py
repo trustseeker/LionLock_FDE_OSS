@@ -300,8 +300,13 @@ def _parse_row_number(value: Any) -> int | None:
         return None
     if isinstance(value, int):
         return value if value >= 0 else None
-    if isinstance(value, str) and value.isascii() and value.isdigit():
-        return int(value)
+    # SQLite row numbers fit in 64 bits (at most 19 digits). Longer strings are not row numbers,
+    # and int() refuses very long ones (Python's integer string limit) with ValueError.
+    if isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 19:
+        try:
+            return int(value)
+        except ValueError:
+            return None
     return None
 
 
