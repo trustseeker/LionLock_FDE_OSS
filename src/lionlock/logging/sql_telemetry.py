@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
-
 from lionlock.core.models import canonical_gating_decision
 from lionlock.utils.sql_batch_writer import (
     DEFAULT_MAX_RETRIES,
@@ -16,6 +15,7 @@ from lionlock.utils.sql_batch_writer import (
     QueuedEvent,
     SQLBatchWriter,
 )
+from lionlock.utils.sql_optional import load_sqlalchemy
 from lionlock.utils.sql_writer_keys import (
     WRITER_KEY_COLUMNS,
     WRITERS_COLUMNS,
@@ -28,7 +28,6 @@ from lionlock.utils.sql_writer_keys import (
     stored_seqs_params,
     stored_seqs_sql,
 )
-from lionlock.utils.sql_optional import load_sqlalchemy
 
 from .connection import load_dotenv, validate_identifier
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD, prepare_event_for_sql

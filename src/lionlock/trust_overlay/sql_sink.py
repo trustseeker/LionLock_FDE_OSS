@@ -8,7 +8,6 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
 
-
 from lionlock.logging.connection import validate_identifier
 from lionlock.utils.sql_batch_writer import (
     DEFAULT_MAX_RETRIES,
@@ -17,6 +16,7 @@ from lionlock.utils.sql_batch_writer import (
     QueuedEvent,
     SQLBatchWriter,
 )
+from lionlock.utils.sql_optional import load_sqlalchemy
 from lionlock.utils.sql_writer_keys import (
     WRITER_KEY_COLUMNS,
     claim_writer_id_sqlalchemy,
@@ -27,7 +27,6 @@ from lionlock.utils.sql_writer_keys import (
     stored_seqs_params,
     stored_seqs_sql,
 )
-from lionlock.utils.sql_optional import load_sqlalchemy
 
 _RECORD_COLUMNS: List[Tuple[str, str]] = [
     ("timestamp", "TEXT"),

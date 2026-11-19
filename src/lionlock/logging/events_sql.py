@@ -5,7 +5,6 @@ import math
 import sqlite3
 from typing import Any, Dict, Iterable, Tuple
 
-
 from lionlock.core.gating import severity_band
 from lionlock.core.models import canonical_gating_decision
 from lionlock.utils.sql_optional import load_sqlalchemy

@@ -4,7 +4,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-
 from lionlock.logging.connection import validate_identifier
 from lionlock.utils.sql_optional import load_sqlalchemy
 
