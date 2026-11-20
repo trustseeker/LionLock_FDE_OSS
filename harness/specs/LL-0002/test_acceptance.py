@@ -198,14 +198,15 @@ def test_r5_more_evidence_cannot_lift_a_hard_gated_block() -> None:
         assert decision.reason_code == "repetition_loop", context
 
 
-def test_r4_out_of_range_scores_are_averaged_before_clamping() -> None:
-    # Found in review: clamping each score first made a red reply look "not red without
-    # hallucination evidence" even though hallucination carried no weight.
-    scores = {**dict.fromkeys(SIGNALS, 0.0), "repetition_loopiness": 1.8}
-    weights = {"repetition_loopiness": 1.0, "context_adherence": 1.0}
-    decision = evaluate_policy(_bundle(scores, low_conf=0.0), weights=weights)
-    assert (decision.severity, decision.gating_decision) == ("red", "BLOCK")
-    assert decision.policy_adjustment is None
+@pytest.mark.parametrize("value", [1.8, 1.019, 2.0, -0.01])
+def test_r7_scores_outside_the_unit_interval_are_refused(value: float) -> None:
+    # Reviews found two ways out-of-range scores weakened a decision (1.8 in the warn-only
+    # counterfactual; 2.0 times the largest float lifting a hard-gated block).
+    scores = {**dict.fromkeys(SIGNALS, 0.0), "repetition_loopiness": value}
+    with pytest.raises(ValueError, match="repetition_loopiness"):
+        evaluate_policy(_bundle(scores, low_conf=0.0))
+    with pytest.raises(ValueError, match="low_conf_halluc"):
+        evaluate_policy(_bundle(dict.fromkeys(SIGNALS, 0.0), low_conf=value))
 
 
 INVALID = {
@@ -222,6 +223,13 @@ INVALID = {
     "misspelt mode": {"hallucination_mode": "warn_onyl"},
     "empty thresholds": {"thresholds": {}},
     "text weight": {"weights": {**DEFAULT_SIGNAL_WEIGHTS, "repetition_loopiness": "0.3"}},
+    "smallest positive weight": {"weights": {"context_adherence": 5e-324}},
+    "weight below range": {"weights": {**DEFAULT_SIGNAL_WEIGHTS, "context_adherence": 1e-7}},
+    "weight above range": {"weights": {**DEFAULT_SIGNAL_WEIGHTS, "context_adherence": 1e7}},
+    "largest float weight": {"weights": {"repetition_loopiness": 1.7976931348623157e308}},
+    "weights overflow when added": {
+        "weights": {"repetition_loopiness": 1e308, "context_adherence": 1e308}
+    },
 }
 
 

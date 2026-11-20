@@ -98,11 +98,13 @@ because the gate is where the coercion happens.
   computed from the scores and falls when novelty risk rises, by design, so no claim is made about
   reply text end to end.
 - **R7 Invalid policy fails closed.** `evaluate_policy` raises `ValueError`, naming the setting, for:
-  a weight that is not a finite number or is negative; an enabled signal name that is not a signal;
-  no enabled signal with a positive weight; thresholds missing `yellow`, `orange` or `red`, holding a
+  a weight that is not a finite number, is negative, or is positive but outside
+  `[1e-6, 1e6]` (only ratios matter, and the bounds keep every product and sum in float range); an enabled signal name that is not a signal;
+  no enabled signal with a positive weight; enabled weights whose sum is not a finite number; thresholds missing `yellow`, `orange` or `red`, holding a
   value that is not finite, or not satisfying `0 <= yellow < orange < red <= 1`; and a
   `hallucination_mode` other than `"warn_only"` or `"block"`. `decide_gate` raises `ValueError` for
-  the same thresholds and mode problems and for an `aggregate_score` that is not a finite number. An
+  the same thresholds and mode problems and for an `aggregate_score` that is not a finite number. Both raise `ValueError`, naming the
+  field, for a signal score or derived value that is not a finite number in `[0, 1]`. An
   invalid setting is never coerced into a decision.
 - **R8** The product equals `golden.json`'s `expected` exactly, fingerprint included.
 - **R9** `docs/GATING_POLICY.md` explains severity versus action, attribution, the three adjustments,
@@ -147,6 +149,25 @@ Review of the implementation found that the first version of this spec contradic
 
 The oracle was changed first and the golden regenerated from it against the library as it was
 before LL-0002, as for the original golden. The implementation was changed after.
+
+## Revision after external review (20 November 2026)
+
+An external pre-release review found that each weight could be finite while their sum was not:
+two weights of `1e308` passed R7, their total overflowed to infinity, and the weighted mean became
+`finite / inf = 0.0`, so a reply that should be BLOCKed was ALLOWed. R7 now also refuses enabled
+weights whose sum is not finite, and the case is an acceptance test. The golden is unchanged: no
+product case uses such weights.
+
+## Revision for the full pre-release review (20 November 2026)
+
+A full review of release candidate `6508a229` found three more ways extreme numbers could weaken a
+decision: a positive weight of `5e-324` underflowed every product to 0 and turned BLOCK into ALLOW;
+a score of 2.0 times the largest float overflowed in R5's restricted mean, which was then read as
+0 and lifted a block (an R6 violation); and the latency mean used built-in `sum()`, whose rounding
+changed in Python 3.12. R7 now bounds positive weights to `[1e-6, 1e6]` and requires every signal
+score and derived value to lie in `[0, 1]` (the scorer never produces anything else), the
+restricted mean refuses a non-finite result, and means use `math.fsum`, which is correctly
+rounded on every version. Each reviewer case is an acceptance test. The golden is unchanged.
 
 ## How this is checked
 
