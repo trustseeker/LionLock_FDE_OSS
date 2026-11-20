@@ -137,6 +137,9 @@ def _pick_by_order(values: Dict[str, float], order: Iterable[str]) -> str:
 
 
 HALLUCINATION_MODES = ("warn_only", "block")
+# Positive weights are bounded (LL-0002 R7); only their ratios matter.
+MIN_POSITIVE_WEIGHT = 1e-6
+MAX_WEIGHT = 1e6
 # Evidence about hallucination: the raw signal and the derived signal computed from it. warn_only
 # may soften a red decision only when this evidence alone is what makes it red (LL-0002, D1).
 HALLUCINATION_EVIDENCE = ("hallucination_risk", "low_conf_halluc")
@@ -189,6 +192,14 @@ def _validate_policy(
     for key, value in resolved.items():
         if not _is_finite_number(value) or value < 0:
             raise ValueError(f"weights[{key!r}] must be a finite number >= 0, got {value!r}")
+        if value != 0 and not MIN_POSITIVE_WEIGHT <= value <= MAX_WEIGHT:
+            # Only the ratios between weights matter. Bounding them keeps every product and sum
+            # well inside the float range: no underflow to 0 (5e-324) and no overflow to inf
+            # (1e308), either of which could turn a BLOCK into an ALLOW.
+            raise ValueError(
+                f"weights[{key!r}] must be 0 or between {MIN_POSITIVE_WEIGHT} and {MAX_WEIGHT}, "
+                f"got {value!r}"
+            )
     signals = tuple(SignalScores.__dataclass_fields__)
     enabled = None if enabled_signals is None else list(enabled_signals)
     if enabled is not None:
@@ -212,18 +223,21 @@ def _validate_policy(
 
 
 def _validate_evidence(signal_scores: SignalScores, derived_signals: DerivedSignals) -> None:
-    """Refuse evidence that is not a finite number (review A1).
+    """Refuse evidence that is not a finite number in [0, 1] (review A1; LL-0002 R7).
 
     A ``nan`` or infinite score used to be read as 0.0, so broken evidence could lower the risk
-    and turn into ALLOW. Finite values outside [0, 1] are still clamped, as before.
+    and turn into ALLOW. Every score the scorer produces lies in [0, 1]; a value outside it is a
+    bug or tampering, and accepting it let extreme arithmetic weaken a decision.
     """
     for group, values in (
         ("signal_scores", signal_scores.as_dict()),
         ("derived_signals", derived_signals.as_dict()),
     ):
         for key, value in values.items():
-            if not _is_finite_number(value):
-                raise ValueError(f"{group}[{key!r}] must be a finite number, got {value!r}")
+            if not _is_finite_number(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(
+                    f"{group}[{key!r}] must be a finite number between 0 and 1, got {value!r}"
+                )
 
 
 def _restricted_risk(
@@ -251,7 +265,12 @@ def _restricted_risk(
         weight = weights.get(key, 0.0)
         weighted_sum += float(scores[key]) * weight
         weight_total += weight
-    sub_raw = _safe_unit_interval(weighted_sum / weight_total if weight_total else 0.0)
+    mean = weighted_sum / weight_total if weight_total else 0.0
+    if not math.isfinite(mean):
+        # Validated inputs cannot get here; if anything ever does, refuse rather than read it
+        # as 0.0, which would lift a block.
+        raise ValueError("restricted risk is not a finite number")
+    sub_raw = _clamp(mean)
     sub_derived = {key: value for key, value in derived_risk_map.items() if allowed(key)}
     sub_derived_channel = max(sub_derived.values()) if sub_derived else 0.0
     is_red = severity_band(_clamp(max(sub_raw, sub_derived_channel)), thresholds) == "red"

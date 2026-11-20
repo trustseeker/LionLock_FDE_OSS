@@ -22,12 +22,12 @@
     "harness/specs/LL-0001/oracle.py": "d198253e997041397105add19e4fad94f25836b919c18944ccf63e0efb4865d7",
     "harness/specs/LL-0001/product.py": "3527a030d5f1787c689eaa3dbe470e5464a0a14f804099eb7a2618bb911b1bbd",
     "harness/specs/LL-0001/test_acceptance.py": "2f018f74cfd460c78d74582449545df6be6e58906630edd40a920a11b386d9f1",
-    "harness/specs/LL-0002/SPEC.md": "50967bdb3b0438eb1f15e790549c8a1c3b9634abb455c6884744dd58f8ec60e9",
+    "harness/specs/LL-0002/SPEC.md": "656c01c74d900f04e89042db6f23cf60614a81e8379148e90f0d4f886cc59447",
     "harness/specs/LL-0002/corpus.json": "3ed5c68b5a0c46d783eba7ac24a31bcff4a75825f9772926a589c447de0dddd0",
     "harness/specs/LL-0002/golden.json": "ad3752f070586b688c06f9acbda317058b77071cbb39f77d7c728960a4ff0bbe",
-    "harness/specs/LL-0002/oracle.py": "9cd9bc0d42fcca897211c4ba80674f3254f4bb62f50d4cc27cf0b8f0d05d14ea",
+    "harness/specs/LL-0002/oracle.py": "717f83dd05e97b137240f1505fdb157d98163d94f23045792d4bcd5dd0182278",
     "harness/specs/LL-0002/product.py": "bb449873fa92bbeaa8dea4a07976bbb4281491801aa2111bb2f83b15defc7b93",
-    "harness/specs/LL-0002/test_acceptance.py": "46bb2a7e08059e4f799a4c054800a62037510e18eb72ab35b856e62bcdda1b19",
+    "harness/specs/LL-0002/test_acceptance.py": "3db4565457c055c2ec8a837b965b441cbb3603fe3265009210372792242af937",
     "harness/specs/TEMPLATE.md": "c21fd2d7a33fb01826d6b1ee08262d2e961d4790619e42bcf7d6f20bb649b981",
     "harness/verify.py": "af4db60ca8d2d385c71829b253808622ab308ab835afd35201a38b76a16190e5"
   }

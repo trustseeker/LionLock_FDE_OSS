@@ -163,7 +163,8 @@ def _fatigue_risk_score(
 def _latency_jitter_score(latencies: list[float]) -> float:
     if len(latencies) < 2:
         return 0.0
-    mean = sum(latencies) / len(latencies)
+    # math.fsum is correctly rounded on every Python version; built-in sum() changed in 3.12.
+    mean = math.fsum(latencies) / len(latencies)
     if mean <= 0.0:
         return 0.0
     jitter = pstdev(latencies)
@@ -327,6 +328,9 @@ def aggregate_score(
         weight = weights.get(key, 0.0)
         weighted_sum += value * weight
         weight_total += weight
+    for key, weight in weights.items():
+        if weight and not 1e-6 <= weight <= 1e6:
+            raise ValueError(f"weight for {key!r} must be 0 or between 1e-06 and 1e+06")
     if not math.isfinite(weight_total):
         # finite / inf would be 0.0: a silent "no risk". Refuse instead (fail closed).
         raise ValueError("signal weights add up to more than a float can hold")

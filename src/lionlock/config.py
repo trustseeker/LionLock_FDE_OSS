@@ -313,6 +313,10 @@ def policy_config_problems(config: Mapping[str, Any]) -> List[str]:
             for name, value in weights.items():
                 if not _is_finite_number(value) or value < 0:
                     problem(f"signals.weights.{name}", value, "must be a finite number >= 0")
+                elif value and not 1e-6 <= float(value) <= 1e6:
+                    problem(
+                        f"signals.weights.{name}", value, "must be 0 or between 1e-06 and 1e+06"
+                    )
 
     # The aggregate is a weighted mean over the enabled signals. If no enabled signal carries
     # weight it is 0.0 for every response, so the raw-signal channel can never gate anything.

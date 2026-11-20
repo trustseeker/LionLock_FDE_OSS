@@ -8,6 +8,7 @@ harness, including in the sdist's test suite.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
@@ -167,19 +168,47 @@ def test_weights_whose_sum_overflows_are_refused_not_turned_into_allow() -> None
     same_ratio = {"repetition_loopiness": 1.0, "context_adherence": 1.0}
     assert evaluate_policy(bundle, weights=same_ratio).gating_decision == "BLOCK"
     huge = {"repetition_loopiness": 1e308, "context_adherence": 1e308}
-    with pytest.raises(ValueError, match="add up"):
+    with pytest.raises(ValueError, match="between"):
         evaluate_policy(bundle, weights=huge)
-    # A single very large weight is fine: only its ratio to the others matters.
-    single = {"repetition_loopiness": 1e308, "context_adherence": 0.0}
-    assert evaluate_policy(bundle, weights=single).gating_decision == "BLOCK"
+    # Only ratios matter: the same ratio inside the allowed range still blocks.
+    assert (
+        evaluate_policy(
+            bundle, weights={"repetition_loopiness": 1e6, "context_adherence": 1e6}
+        ).gating_decision
+        == "BLOCK"
+    )
+
+
+def test_the_smallest_positive_weight_is_refused_not_underflowed_to_allow() -> None:
+    # Full review F1: on shipped fixture 03, a sole weight of 5e-324 turned BLOCK/REFRESH into
+    # ALLOW, because every product underflowed to 0.
+    import json
+    from pathlib import Path
+
+    from lionlock.core.scoring import score_payload
+
+    corpus = Path(__file__).resolve().parents[1] / "harness/specs/LL-0001/corpus.json"
+    entry = next(e for e in json.loads(corpus.read_text())["payloads"] if e["id"].startswith("03"))
+    bundle = score_payload({"prompt": entry["prompt"], "response": entry["response"]})
+    assert bundle is not None
+    ok = evaluate_policy(
+        bundle, weights={"context_adherence": 1.0}, enabled_signals=["context_adherence"]
+    )
+    assert ok.gating_decision != "ALLOW"
+    with pytest.raises(ValueError, match="between"):
+        evaluate_policy(
+            bundle, weights={"context_adherence": 5e-324}, enabled_signals=["context_adherence"]
+        )
 
 
 def test_aggregate_score_refuses_an_overflowing_weight_total() -> None:
     from lionlock.core.scoring import aggregate_score
 
     bundle = _bundle(repetition=0.85, context=0.85)
-    with pytest.raises(ValueError, match="add up"):
+    with pytest.raises(ValueError, match="between"):
         aggregate_score(bundle, weights={"repetition_loopiness": 1e308, "context_adherence": 1e308})
+    with pytest.raises(ValueError, match="between"):
+        aggregate_score(bundle, weights={"repetition_loopiness": 5e-324})
 
 
 def test_config_refuses_weights_whose_sum_overflows(tmp_path) -> None:
@@ -190,5 +219,18 @@ def test_config_refuses_weights_whose_sum_overflows(tmp_path) -> None:
         "[signals.weights]\nrepetition_loopiness = 1e308\ncontext_adherence = 1e308\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="finite number"):
+    with pytest.raises(ValueError, match="between"):
         load_config(str(path))
+
+
+def test_latency_mean_is_the_same_on_every_python_version() -> None:
+    # Full review F3: built-in sum() rounds differently from Python 3.12 on. [1e16, 1.0, 1.0]
+    # sums to 1e16 on 3.11 and to 1e16 + 2 on 3.12; math.fsum gives 1e16 + 2 everywhere.
+    import math
+
+    from lionlock.core import scoring
+
+    values = [1e16, 1.0, 1.0]
+    assert math.fsum(values) == 1e16 + 2
+    source = Path(scoring.__file__).read_text(encoding="utf-8")
+    assert "sum(latencies)" not in source.replace("fsum(latencies)", "")

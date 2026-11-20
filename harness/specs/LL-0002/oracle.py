@@ -156,6 +156,8 @@ def _validate(
     for key, value in resolved.items():
         if not _finite_number(value) or value < 0:
             raise ValueError(f"weights[{key}]")
+        if value != 0 and not 1e-6 <= value <= 1e6:
+            raise ValueError(f"weights[{key}] out of range")
     if enabled is not None:
         for key in enabled:
             if key not in SIGNALS:
