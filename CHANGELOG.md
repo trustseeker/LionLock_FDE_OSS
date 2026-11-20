@@ -28,8 +28,12 @@ Compatibility notes before upgrading.**
   Invalid modes, thresholds, weights and enabled signals, and non-finite scores, are now refused
   with an error that names the setting, both in `evaluate_policy` and when a config is loaded.
   The trust overlay no longer reports a non-finite risk as TRUSTED.
-  Weights that are each finite but add up to more than a float can hold (for example two
-  weights of `1e308`, which turned a BLOCK into an ALLOW with risk 0.0) are refused too.
+  Weights and scores at numeric extremes are refused too: positive weights must lie in
+  `[1e-6, 1e6]` (two weights of `1e308` overflowed and one of `5e-324` underflowed, each turning
+  a BLOCK into an ALLOW), and every signal score and derived value must be a number from 0 to 1
+  (out-of-range values used to be clamped, and could weaken a decision through overflow).
+- **A decision could differ between Python versions.** Means used built-in `sum()`, whose
+  rounding changed in Python 3.12; they now use `math.fsum`, which is identical on 3.10-3.14.
 - **Replay used the shell's `LIONLOCK_GATING_ENABLED`, and replay and the simulator used default
   weights.** Replay now uses only the recorded policy, and both pass the policy's weights and
   enabled signals to the gate. A malformed `policies.toml` entry is an error rather than a silent
@@ -168,7 +172,7 @@ Compatibility notes before upgrading.**
 ### Compatibility
 
 - **Configs and policies that loaded before may now be refused**, with an error naming the bad
-  setting. A `severity` of `red` can now come with a `REFRESH` or `ALLOW` action; read
+  setting. Finite scores outside `[0, 1]` are now refused instead of clamped. A `severity` of `red` can now come with a `REFRESH` or `ALLOW` action; read
   `policy_adjustment`. `trigger_signal` and `reason_code` can differ, because attribution is now
   weighted.
 - **An older LionLock cannot verify format-2 `TrustVaultLogger` entries.** Existing logs are not
