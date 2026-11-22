@@ -97,7 +97,10 @@ bad value into a decision:
 - an enabled signal name that is not a signal, or no enabled signal with a weight above 0;
 - a signal score, derived signal or aggregate score that is not a finite number.
 
-Finite scores outside 0 to 1 are still clamped into that range.
+Every signal score and derived signal must be a number from 0 to 1, and every positive weight
+must be between 0.000001 and 1,000,000 (only the ratios between weights matter). Values outside
+those ranges are refused, because extreme arithmetic (a weight that underflows to 0, or a
+product that overflows) could otherwise weaken a decision.
 
 Pass the config's `signals.weights` and `signals.enabled` (and `gating.thresholds` and
 `gating.hallucination_mode`) to `evaluate_policy`, so that the decision matches the `config_hash`

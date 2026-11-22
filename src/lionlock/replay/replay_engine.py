@@ -7,7 +7,12 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 from lionlock import config as lionlock_config
 from lionlock.core import gating as gating_module
-from lionlock.core.models import DerivedSignals, SignalBundle, SignalScores, canonical_gating_decision
+from lionlock.core.models import (
+    DerivedSignals,
+    SignalBundle,
+    SignalScores,
+    canonical_gating_decision,
+)
 from lionlock.core.numeric import is_finite
 from lionlock.core.scoring import aggregate_score
 
@@ -79,6 +84,9 @@ def _parse_signal_bundle(raw: Any) -> SignalBundle | None:
             # would lower the risk and could replay a broken record as ALLOW, which the gate itself
             # refuses to do; report the bundle as invalid instead. An absent score (missing key or
             # null, as in older schema versions) still reads as 0.0.
+            raise _InvalidScore(key)
+        if value is not None and not 0.0 <= value <= 1.0:
+            # Scores lie in [0, 1]; the gate refuses anything else, so report the bundle.
             raise _InvalidScore(key)
         return float(value) if value is not None else 0.0
 

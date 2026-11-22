@@ -133,17 +133,12 @@ def test_non_finite_evidence_is_refused_naming_the_field() -> None:
             evaluate_policy(bundle)
 
 
-def test_risk_score_clamped_with_finite_out_of_range_inputs() -> None:
-    bundle = _bundle(
-        repetition=1.7,
-        novelty=-3.0,
-        coherence=-1.0,
-        context=0.2,
-        hallucination=0.1,
-        fatigue=2.0,
-        low_conf_halluc=-0.4,
-        congestion=-0.5,
-    )
-    decision = evaluate_policy(bundle)
-    assert math.isfinite(decision.decision_risk_score)
-    assert 0.0 <= decision.decision_risk_score <= 1.0
+def test_finite_out_of_range_inputs_are_refused() -> None:
+    # Scores and derived values must lie in [0, 1] (LL-0002 R7); finite values outside it used to
+    # be clamped, and the full pre-release review found ways that let extreme values weaken a
+    # decision.
+    bundle = _bundle(repetition=1.7, novelty=0.1, coherence=0.1, context=0.2, hallucination=0.1)
+    with pytest.raises(ValueError, match="repetition_loopiness"):
+        evaluate_policy(bundle)
+    with pytest.raises(ValueError, match="fatigue_risk_index"):
+        evaluate_policy(_bundle(fatigue=2.0))
