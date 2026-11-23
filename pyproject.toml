@@ -42,7 +42,7 @@ gui = [
   "streamlit>=1.56.0",
 ]
 failsafe = [
-  "cryptography>=42",
+  "cryptography>=50.0.2",
 ]
 
 [project.scripts]
