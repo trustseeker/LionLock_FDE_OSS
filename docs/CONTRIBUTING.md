@@ -1,6 +1,6 @@
 # Contributing
 
-Please follow the [Code of Conduct](../CODE_OF_CONDUCT.md) and use the issue and pull request templates in [`.github/`](../.github/). Report security issues privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
+Please follow the [Code of Conduct](../CODE_OF_CONDUCT.md) and use the issue and pull request templates in [`.github/`](../.github/). Report security issues privately as described in [SECURITY.md](../SECURITY.md), not in a public issue.
 
 ## Setup
 - Create and activate a virtualenv (Python 3.10+):

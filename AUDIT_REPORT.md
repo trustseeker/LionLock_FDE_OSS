@@ -5,7 +5,7 @@ It covered an earlier, smaller codebase, and its "approved for production" verdi
 to LionLock as it is now. LionLock is beta software, and no production approval is given.
 
 Later reviews found and fixed problems that report missed. [`CHANGELOG.md`](CHANGELOG.md) lists
-them. To report a vulnerability, follow [`docs/SECURITY.md`](docs/SECURITY.md).
+them. To report a vulnerability, follow [`SECURITY.md`](SECURITY.md).
 
 ## Where the original is
 

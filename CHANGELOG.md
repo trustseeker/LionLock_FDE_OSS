@@ -139,6 +139,10 @@ Compatibility notes before upgrading.**
   file and then re-bless itself by regenerating the lock.
 - Releases are built and uploaded by GitHub Actions through PyPI Trusted Publishing, so no API
   token has to be stored.
+- A full security policy, `SECURITY.md`, at the repository root. It covers how to report privately,
+  what happens next, supported versions, what counts as a vulnerability in LionLock and which
+  documented limits do not, and how releases are protected. It ships in the sdist and is linked
+  from the package metadata; `docs/SECURITY.md` now points to it.
 
 ### Changed
 

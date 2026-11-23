@@ -27,6 +27,7 @@ Homepage = "https://github.com/trustseeker/LionLock_FDE_OSS"
 Source = "https://github.com/trustseeker/LionLock_FDE_OSS"
 Changelog = "https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md"
 Issues = "https://github.com/trustseeker/LionLock_FDE_OSS/issues"
+Security = "https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/SECURITY.md"
 
 [project.optional-dependencies]
 dev = [

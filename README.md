@@ -112,7 +112,7 @@ lionlock-telemetry preview   # exactly what an upload would contain, without sen
 
 ## 🤝 Contributing and security
 
-See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately as described in [`docs/SECURITY.md`](docs/SECURITY.md).
+See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md).
 
 ## License
 
