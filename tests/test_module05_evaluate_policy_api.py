@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from lionlock.core import evaluate_policy
 from lionlock.core.models import DerivedSignals, SignalBundle, SignalScores
 
@@ -46,12 +48,15 @@ def test_evaluate_policy_populates_required_fields() -> None:
     assert decision.trigger_signal
 
 
-def test_evaluate_policy_risk_score_clamped_and_finite() -> None:
-    bundle = _bundle(fatigue=2.5)
-    decision = evaluate_policy(bundle)
+def test_evaluate_policy_risk_score_finite_and_out_of_range_refused() -> None:
+    # The largest valid derived value still blocks; a value outside [0, 1] is refused rather
+    # than clamped (LL-0002 R7, after the full pre-release review).
+    decision = evaluate_policy(_bundle(fatigue=1.0))
     assert math.isfinite(decision.decision_risk_score)
     assert 0.0 <= decision.decision_risk_score <= 1.0
     assert decision.gating_decision == "BLOCK"
+    with pytest.raises(ValueError, match="fatigue_risk_index"):
+        evaluate_policy(_bundle(fatigue=2.5))
 
 
 def test_evaluate_policy_trigger_signal_deterministic() -> None:
