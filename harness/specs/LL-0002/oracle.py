@@ -156,12 +156,20 @@ def _validate(
     for key, value in resolved.items():
         if not _finite_number(value) or value < 0:
             raise ValueError(f"weights[{key}]")
+        if value != 0 and not 1e-6 <= value <= 1e6:
+            raise ValueError(f"weights[{key}] out of range")
     if enabled is not None:
         for key in enabled:
             if key not in SIGNALS:
                 raise ValueError("enabled_signals")
     if not any(resolved.get(key, 0.0) > 0 for key in SIGNALS if enabled is None or key in enabled):
         raise ValueError("no enabled signal has a positive weight")
+    total = 0.0
+    for key in SIGNALS:
+        if enabled is None or key in enabled:
+            total += resolved.get(key, 0.0)
+    if not math.isfinite(total):
+        raise ValueError("weights total is not finite")
 
 
 def _before(

@@ -171,7 +171,7 @@ def _latency_jitter_score(latencies: Iterable[Any]) -> float | None:
     ]
     if len(values) < 2:
         return None
-    mean = sum(values) / len(values)
+    mean = math.fsum(values) / len(values)
     if mean <= 0.0:
         return None
     jitter = pstdev(values)
@@ -194,7 +194,7 @@ def _split_window(values: list[float]) -> Tuple[List[float], List[float]]:
 
 
 def _mean(values: list[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
+    return math.fsum(values) / len(values) if values else 0.0
 
 
 def detect_anomaly_events(
@@ -751,7 +751,7 @@ def score_anomalies(
     anomalies: Iterable[AnomalyRecord],
     config: Dict[str, Any],
 ) -> Tuple[float, str]:
-    total = sum(anomaly.weight for anomaly in anomalies)
+    total = math.fsum(anomaly.weight for anomaly in anomalies)
     bands = config.get("severity_bands", {}) if isinstance(config, dict) else {}
     normal_max = float(bands.get("normal_max", 0.3))
     unstable_max = float(bands.get("unstable_max", 0.6))
