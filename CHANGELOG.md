@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0b2 — security, integrity and data-preservation fixes
+## 1.0.0b2 — 25 November 2026 — security, integrity and data-preservation fixes
 
 Recommended for everyone on `1.0.0b1`. That release was published before everything below, so an
 install pinned to it still fails open on the settings described under Fixed.

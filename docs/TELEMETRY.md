@@ -235,10 +235,9 @@ same way (see below).
 
 ## Running the receiver
 
-The reference receiver uses only the Python standard library. Follow the
-[current installation instructions](../README.md) first: b2 is available from a
-pinned source commit while its PyPI publication is pending. **Upgrade the receiver before its
-clients**, because older receivers reject the b2 version label. Back up existing telemetry data
+The reference receiver uses only the Python standard library. Install LionLock first, following
+the [installation instructions](../README.md) (`pip install lionlock==1.0.0b2`). **Upgrade the
+receiver before its clients**, because older receivers reject the b2 version label. Back up existing telemetry data
 and review the [SQLite compatibility notes](../CHANGELOG.md#compatibility) before upgrading.
 Then start the receiver:
 
@@ -263,8 +262,9 @@ With nginx, use `access_log off;` and `client_max_body_size 16m;` in the locatio
 To require tokens, issue one per partner or deployment with the bundled tool. It writes the
 token to a file with owner-only permissions and appends only its SHA-256 hash to the allowlist:
 
-The token helper is a repository script, not an installed CLI. Obtain the same pinned source
-revision in a separate directory before running it from your activated LionLock environment:
+The token helper is a repository script, not an installed CLI. Obtain the source of the release
+you installed, tag `v1.0.0b2`, in a separate directory, then run it from your activated LionLock
+environment:
 
 ```bash
 git clone --no-checkout https://github.com/trustseeker/LionLock_FDE_OSS.git LionLock-token-tools
