@@ -7,8 +7,10 @@ On 19 November 2026, the PyPI JSON API listed only `1.0.0b1`, and GitHub listed 
 availability.
 
 `1.0.0b2` is released from the commit that merges the release pull request, tagged `v1.0.0b2`;
-it includes everything in [CHANGELOG.md](../CHANGELOG.md). Until PyPI lists it, the
-[README](../README.md) installs that tag from source. An earlier pre-release source commit,
+it includes everything in [CHANGELOG.md](../CHANGELOG.md). The [README](../README.md) is also
+the PyPI project description, which cannot change after upload, so it leads with the PyPI command
+and keeps the tag install as the fallback until PyPI lists the release. The site installs the tag
+until step 5 below. An earlier pre-release source commit,
 `05434565`, also declared `1.0.0b2`; it lacks the November 2026 fixes and must not be used.
 
 ## Before creating the release
@@ -58,8 +60,8 @@ it includes everything in [CHANGELOG.md](../CHANGELOG.md). Until PyPI lists it, 
    download/install with no cache from `https://pypi.org/simple` in a fresh environment.
    Match the downloaded distribution hashes against the approved artifact. Repeat the version,
    dependency and CLI checks and the README example outside the source tree.
-5. Only after that succeeds, update the README, receiver instructions and site to lead with the
-   PyPI command, remove the pending-publication notices, and record the release/workflow links.
+5. Only after that succeeds, update the receiver instructions and site to lead with the PyPI
+   command, remove the pending-publication notices, and record the release/workflow links.
    Keep the compatibility warnings. If publishing fails, retain the verified source fallback
    and report the failure without claiming that the package is available.
 

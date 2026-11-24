@@ -152,7 +152,11 @@ Compatibility notes before upgrading.**
   so in `policy_adjustment`. Before, warn-only and the hard-gate list rewrote red to orange.
 - `lionlock-sim --append-run` ids are `<id>-<n>`; the sim report gains an `inputs` block marking its
   sessions as synthetic, and coverage keys are renamed `*_input_high`.
-- Validation errors no longer echo their input. Pydantic is no longer used at runtime.
+- Validation errors no longer echo their input. Pydantic is no longer used at runtime, and is no
+  longer installed with LionLock: the only runtime dependency is `tomli`, below Python 3.11.
+- Package metadata: the licence is the SPDX expression `Apache-2.0`, and the supported Python
+  versions (3.10 to 3.14) are listed. The README, which PyPI shows as the project description,
+  uses absolute links so they work there.
 - Optional SQLAlchemy is imported only when a SQLAlchemy code path runs, so importing the SQL
   sinks, readers or simulator no longer loads it.
 - The package description now says what LionLock does and does not claim.
@@ -177,6 +181,8 @@ Compatibility notes before upgrading.**
 
 ### Compatibility
 
+- **`pydantic` is no longer installed with LionLock.** If your own code imports it and relied on
+  LionLock to install it, add it to your own requirements.
 - The optional `failsafe` extra now needs `cryptography>=50.0.2` (it allowed `>=42`). Every
   earlier `cryptography` release has published vulnerabilities; 50.0.2 has none and supports
   Python 3.10 to 3.14.

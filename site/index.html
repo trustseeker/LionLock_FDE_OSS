@@ -200,12 +200,11 @@
           rules out a quietly swallowed fallback. The blocker is itself tested, so it cannot
           pass for the wrong reason. One gap stays open, and this page would rather name it
           than imply it is closed: a compiled extension calling <code>connect(2)</code> itself
-          would bypass Python's <code>socket</code> module and go unrecorded. The import
-          audits do not rule that out &mdash; they check a named list of modules, and
-          <code>pydantic_core</code>, a compiled extension, is loaded on the scoring path.
-          What keeps that risk small is that the runtime depends on <code>pydantic</code> and,
-          below Python 3.11, <code>tomli</code> &mdash; a short list you can audit yourself
-          &mdash; not that a test has proved it.
+          would bypass Python's <code>socket</code> module and go unrecorded. What narrows
+          that gap is that scoring and deciding load only CPython's own compiled extensions,
+          and a test fails if a third-party one appears there. The runtime's only dependency is
+          <code>tomli</code>, below Python 3.11, to read the config file; it is not loaded on
+          the scoring path. That is a short list you can audit yourself, not a proof.
         </li>
         <li>
           Lint and type findings are <strong>ratcheted</strong>: pre-existing ones are

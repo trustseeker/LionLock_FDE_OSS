@@ -8,18 +8,26 @@ version = "1.0.0b2"
 description = "Deterministic, non-AI scoring and gating of LLM replies, with a hash-chained local audit log."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "LionLock Maintainers" }]
 dependencies = [
   "tomli>=2.0.0; python_version < \"3.11\"",
-  "pydantic>=2.0",
 ]
+keywords = ["llm", "guardrails", "deterministic", "audit-log", "gating", "ai-safety"]
 classifiers = [
   "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "License :: OSI Approved :: Apache Software License",
-  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Quality Assurance",
+  "Typing :: Typed",
 ]
 
 [project.urls]

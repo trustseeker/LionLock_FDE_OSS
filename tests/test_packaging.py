@@ -72,3 +72,35 @@ def test_release_smoke_script_passes() -> None:
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _pyproject() -> dict:
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        import tomli as tomllib
+    return tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def test_runtime_dependencies_are_only_what_the_runtime_imports() -> None:
+    # Pydantic left the runtime in 1.0.0b2; installing it anyway adds a compiled third-party
+    # extension, and a plugin loader, to every installation for nothing.
+    assert _pyproject()["project"]["dependencies"] == ['tomli>=2.0.0; python_version < "3.11"']
+
+
+def test_license_is_an_spdx_expression() -> None:
+    project = _pyproject()["project"]
+    assert project["license"] == "Apache-2.0"
+    assert project["license-files"] == ["LICENSE", "NOTICE"]
+    assert not [c for c in project["classifiers"] if c.startswith("License ::")]
+
+
+def test_readme_links_work_on_pypi() -> None:
+    # README.md is the PyPI project description, where a relative link resolves against
+    # pypi.org and leads nowhere. Every link must be absolute or an in-page anchor.
+    import re
+
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    targets = re.findall(r"\]\(([^)\s]+)\)", text) + re.findall(r'(?:href|src)="([^"]+)"', text)
+    relative = [t for t in targets if not t.startswith(("https://", "http://", "#", "mailto:"))]
+    assert relative == []
