@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools==84.1.0"]
+requires = ["setuptools==84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -43,7 +43,7 @@ gui = [
   "streamlit>=1.56.0",
 ]
 failsafe = [
-  "cryptography>=42",
+  "cryptography>=50.0.2",
 ]
 
 [project.scripts]

@@ -175,6 +175,9 @@ Compatibility notes before upgrading.**
 
 ### Compatibility
 
+- The optional `failsafe` extra now needs `cryptography>=50.0.2` (it allowed `>=42`). Every
+  earlier `cryptography` release has published vulnerabilities; 50.0.2 has none and supports
+  Python 3.10 to 3.14.
 - **Configs and policies that loaded before may now be refused**, with an error naming the bad
   setting. Finite scores outside `[0, 1]` are now refused instead of clamped. A `severity` of `red` can now come with a `REFRESH` or `ALLOW` action; read
   `policy_adjustment`. `trigger_signal` and `reason_code` can differ, because attribution is now
