@@ -4,7 +4,7 @@ about: Something LionLock does differently from its docs or tests
 labels: bug
 ---
 
-**Do not report security vulnerabilities here.** See [docs/SECURITY.md](../../docs/SECURITY.md).
+**Do not report security vulnerabilities here.** See [SECURITY.md](../../SECURITY.md).
 
 ## What happened
 

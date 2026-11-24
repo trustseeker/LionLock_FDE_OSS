@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Sequence, Tuple
 
 import pytest
+import tomllib
 
 from lionlock.logging.token_auth import hash_token
 from lionlock.telemetry import export as export_module
@@ -61,11 +62,6 @@ from lionlock.telemetry.upload import (
     upload_pending,
     upload_snapshot,
 )
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10; tomli is a declared dependency there
-    import tomli as tomllib
 
 APPENDED_CANARY = b"SYNTHETIC_PRIVATE_ASSET_CANARY_APPENDED_ONLY"
 RESIDUE_CANARY = b"SYNTHETIC_PRIVATE_ASSET_CANARY_DELETED_RESIDUE"

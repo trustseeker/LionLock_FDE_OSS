@@ -1,7 +1,7 @@
 # The sdist is meant to be self-contained: a recipient can unpack it, install it and run the test
 # suite. Tests need their fixture and conftest, so the whole tests/ tree ships, together with the
 # examples and docs that the README and the quickstart point to.
-include LICENSE NOTICE README.md CHANGELOG.md lionlock.toml.example
+include LICENSE NOTICE README.md CHANGELOG.md SECURITY.md lionlock.toml.example
 graft docs
 graft examples
 graft tests

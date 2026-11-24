@@ -10,9 +10,9 @@ No AI model is involved in scoring or deciding: the same input always gives the 
 
 - **Scores** a prompt and reply with lexical heuristics: repetition, low novelty, sentence structure, and drift from the prompt's words.
 - **Decides** a severity band (green, yellow, orange, red) and a suggested action (`ALLOW`, `REFRESH`, `BLOCK`), with the signal and reason that triggered it.
-- **Logs** decisions you record to a local, hash-chained SQLite file you can verify. Scoring and deciding do not write the log themselves; [`examples/quickstart.py`](examples/quickstart.py) shows the logging calls. The chain shows edited, reordered or removed rows. It cannot show that a whole log was rewritten unless you compare it with a copy of its latest hash kept somewhere the writer cannot change.
+- **Logs** decisions you record to a local, hash-chained SQLite file you can verify. Scoring and deciding do not write the log themselves; [`examples/quickstart.py`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/examples/quickstart.py) shows the logging calls. The chain shows edited, reordered or removed rows. It cannot show that a whole log was rewritten unless you compare it with a copy of its latest hash kept somewhere the writer cannot change.
 
-LionLock **does not stop a model call by itself**: it returns a decision, and your code acts on it (see [`docs/GATING_POLICY.md`](docs/GATING_POLICY.md)). Its signals are text heuristics, not fact-checking: they catch loops and some structural problems but can miss a fluent, off-topic answer, and no accuracy figures have been published yet. The fatigue score is uncalibrated: LionLock does not claim to detect model fatigue, and the score is kept out of the decision when its inputs are missing.
+LionLock **does not stop a model call by itself**: it returns a decision, and your code acts on it (see [`docs/GATING_POLICY.md`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/docs/GATING_POLICY.md)). Its signals are text heuristics, not fact-checking: they catch loops and some structural problems but can miss a fluent, off-topic answer, and no accuracy figures have been published yet. The fatigue score is uncalibrated: LionLock does not claim to detect model fatigue, and the score is kept out of the decision when its inputs are missing.
 
 **Language support: English only.** Scoring in 1.0 is built and checked for English text. The tokenizer matches `[A-Za-z0-9']+`, so accented and non-Latin scripts score differently from English, and their decisions are not meaningful. Other languages are planned for later releases: first a Unicode-aware tokenizer, then per-language test sets, and a language will be listed as supported only once its own results are published.
 
@@ -44,33 +44,31 @@ Runs generated sessions through a policy to compare profiles and gating threshol
 
 ## 🚀 Get Started
 
-**Release status checked 28 October 2026:** PyPI provides `1.0.0b1`; `1.0.0b2` is not yet
-published, so `pip install lionlock==1.0.0b2` currently fails. The b1 package lacks the privacy,
-receiver-security and SQLite data-preservation fixes in the [b2 changelog](CHANGELOG.md).
-
-For external testing now, install the b2 source at the verified commit below. This requires
-Python 3.10+ and Git; use a fresh virtual environment. It installs the library and both commands
-(`lionlock-telemetry` and `lionlock-sim`):
+Install from [PyPI](https://pypi.org/project/lionlock/) into a fresh virtual environment
+(Python 3.11 or newer). This installs the library and both commands, `lionlock-telemetry` and
+`lionlock-sim`:
 
 ```bash
-python -m pip install "lionlock @ git+https://github.com/trustseeker/LionLock_FDE_OSS.git@05434565c96a9534494110cf048caad804dc343d"
-python -c "from importlib.metadata import version; print(version('lionlock'))"
+python -m pip install lionlock==1.0.0b2
+python -c "import lionlock; print(lionlock.__version__)"
 ```
 
-The version check should print `1.0.0b2`; this is a source installation, not evidence of a PyPI
-release. Once [PyPI lists b2](https://pypi.org/project/lionlock/#history), use:
+The version check should print `1.0.0b2`. If you use `1.0.0b1`, upgrade: b1 lacks the fixes in
+the [b2 changelog](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md).
+If [PyPI's release history](https://pypi.org/project/lionlock/#history) does not list `1.0.0b2`
+yet, install the same release from its tag instead (this needs Git). Release tags are never moved.
 
 ```bash
-python -m pip install --index-url https://pypi.org/simple lionlock==1.0.0b2
+python -m pip install "lionlock @ git+https://github.com/trustseeker/LionLock_FDE_OSS.git@v1.0.0b2"
 ```
 
 **Existing installations:** back up telemetry data before upgrading and **upgrade the receiver
 before its clients**. Older receivers reject the b2 version label. Native `sqlite:///...` sinks
 with extra custom columns now refuse startup without removing data; review the
-[compatibility notes](CHANGELOG.md#compatibility) before proceeding. Do not delete or rebuild a
+[compatibility notes](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md#compatibility) before proceeding. Do not delete or rebuild a
 database to make an upgrade pass. Internet-facing receivers must require tokens.
 
-Maintainers: see the [release checklist](docs/RELEASING.md) for the protected publishing process.
+Maintainers: see the [release checklist](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/docs/RELEASING.md) for the protected publishing process.
 
 ```python
 from lionlock.core.scoring import score_response
@@ -91,17 +89,17 @@ cd LionLock_FDE_OSS
 bash tools/dev_setup.sh
 ```
 
-Config templates: [`lionlock.toml.example`](lionlock.toml.example) and, for database connection settings only, [`.env.example`](.env.example). Gating is set in `lionlock.toml` or the real environment. A `.env` that LionLock finds by itself never sets gating; one you load explicitly with `load_dotenv(path)` can.
+Config templates: [`lionlock.toml.example`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/lionlock.toml.example) and, for database connection settings only, [`.env.example`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/.env.example). Gating is set in `lionlock.toml` or the real environment. A `.env` that LionLock finds by itself never sets gating; one you load explicitly with `load_dotenv(path)` can.
 
-Five-minute walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+Five-minute walkthrough: [`docs/QUICKSTART.md`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/docs/QUICKSTART.md).
 
-Audit log details: [`docs/AUDIT_LOGGING.md`](docs/AUDIT_LOGGING.md).
+Audit log details: [`docs/AUDIT_LOGGING.md`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/docs/AUDIT_LOGGING.md).
 
 ---
 
 ## 📡 Telemetry
 
-LionLock writes its telemetry to one local SQLite file, `logs/lionlock.db`, and **uploads nothing unless you opt in**. If you enable uploads, only the allowlisted, pseudonymized fields documented in [`docs/TELEMETRY.md`](docs/TELEMETRY.md) are sent, over HTTPS, to a receiver you run. Prompts, responses, raw identifiers, and hostnames are never included, and `DO_NOT_TRACK=1` turns uploads off.
+LionLock writes its telemetry to one local SQLite file, `logs/lionlock.db`, and **uploads nothing unless you opt in**. If you enable uploads, only the allowlisted, pseudonymized fields documented in [`docs/TELEMETRY.md`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/docs/TELEMETRY.md) are sent, over HTTPS, to a receiver you run. Prompts, responses, raw identifiers, and hostnames are never included, and `DO_NOT_TRACK=1` turns uploads off.
 
 ```bash
 lionlock-telemetry status    # where the log is and whether uploads are enabled
@@ -112,10 +110,10 @@ lionlock-telemetry preview   # exactly what an upload would contain, without sen
 
 ## 🤝 Contributing and security
 
-See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately as described in [`docs/SECURITY.md`](docs/SECURITY.md).
+See [`docs/CONTRIBUTING.md`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/docs/CONTRIBUTING.md) and the [Code of Conduct](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/CODE_OF_CONDUCT.md). Report vulnerabilities privately as described in [`SECURITY.md`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/SECURITY.md).
 
 ## License
 
-Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+Apache License 2.0. See [`LICENSE`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/LICENSE) and [`NOTICE`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/NOTICE).
 
-The licence covers the code. Use of the LionLock name and logo is covered by [`TRADEMARK.md`](TRADEMARK.md).
+The licence covers the code. Use of the LionLock name and logo is covered by [`TRADEMARK.md`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/TRADEMARK.md).

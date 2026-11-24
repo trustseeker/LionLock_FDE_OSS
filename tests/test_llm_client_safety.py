@@ -63,7 +63,8 @@ def test_redirect_is_not_followed_and_key_is_not_resent(
     class Redirector(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             self.send_response(302)
-            self.send_header("Location", target_url + self.path)
+            # A fixed path, not the request's: a header is never built from request input.
+            self.send_header("Location", target_url + "/v1/chat/completions")
             self.send_header("Content-Length", "0")
             self.end_headers()
 
