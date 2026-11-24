@@ -99,13 +99,19 @@ data you do not own.
 - Releases are uploaded only by the [publish workflow](.github/workflows/publish.yml), from a
   GitHub release tag, through PyPI Trusted Publishing. No long-lived PyPI token exists.
 - The workflow refuses a tag that does not match the version in `pyproject.toml`. It builds with
-  `scripts/reproducible_build.py`, then installs and tests the exact wheel and sdist in a fresh
-  environment before the upload step can run.
-- Only the upload step can request a PyPI identity token, and it runs in the protected `pypi`
-  deployment environment.
+  `scripts/reproducible_build.py`, checks both files with `twine check --strict`, and checks that
+  there is exactly one wheel and one sdist, named for the tag's version. It then installs the exact
+  wheel in a fresh environment outside the checkout and runs its smoke tests before the upload job
+  can start. The sdist is checked but not installed by the workflow.
+- Only the publish job can request a PyPI identity token. The build and test jobs cannot, and the
+  publish job runs in the protected `pypi` deployment environment, which waits for a maintainer's
+  approval.
 - Builds are reproducible. Anyone can rebuild a release from its tag with
   `python scripts/reproducible_build.py dist`, using `build==1.6.1`, and compare the sha256 of each
   file with the files on PyPI. [docs/RELEASING.md](docs/RELEASING.md) gives the full procedure.
+  Both files are deflate-compressed, so their bytes also depend on the zlib build of the Python
+  that runs the script. Use the Python version in `.python-version`; a different zlib build can
+  produce different hashes from the same source.
 
 ## Running LionLock securely
 

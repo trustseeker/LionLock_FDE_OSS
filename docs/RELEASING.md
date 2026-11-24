@@ -27,8 +27,9 @@ until step 5 below. An earlier pre-release source commit,
    does not reproduce them.
 4. Confirm `pyproject.toml`, wheel and sdist metadata all declare `1.0.0b2`, both CLI entry
    points are present, and the intended tag is exactly `v1.0.0b2`.
-5. Install the built wheel in a fresh environment outside the checkout. Run `python -m pip check`,
-   `scripts/release_smoke.py 1.0.0b2` (the README scoring example and version checks),
+5. Install the built wheel in a fresh environment outside the checkout. Using that environment's
+   Python, run `python -m pip check`, `python "$REPO/scripts/release_smoke.py" 1.0.0b2` where
+   `$REPO` is the checkout's absolute path (the README scoring example and version checks),
    `python -m lionlock.sample_data`, `lionlock-telemetry --help` and `lionlock-sim --help`. Check
    `importlib.metadata.version('lionlock')`. Use synthetic databases for preservation and receiver
    tests; never run release validation against a tester's existing telemetry data.
