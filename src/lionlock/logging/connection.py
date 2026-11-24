@@ -192,36 +192,68 @@ def build_postgres_dsn(role: str, *, database: str = "lionlock_prod") -> str:
     return f"postgresql://{safe_user}:{safe_password}@{host}:{port}/{database}?{query}"
 
 
-def redact_dsn(dsn: str) -> str:
-    if "://" in dsn:
-        split = urlsplit(dsn)
-        user = split.username
-        host = split.hostname or ""
-        port = f":{split.port}" if split.port is not None else ""
-        netloc = ""
-        if user:
-            netloc = quote(user, safe="")
-            if split.password is not None:
-                netloc += ":REDACTED"
-            netloc += "@"
-        netloc += f"{host}{port}"
-        query_pairs = []
-        for key, value in parse_qsl(split.query, keep_blank_values=True):
-            if key.lower() in {"password", "pass", "pwd"}:
-                query_pairs.append((key, "REDACTED"))
-            else:
-                query_pairs.append((key, value))
-        query = urlencode(query_pairs)
-        return urlunsplit((split.scheme, netloc, split.path, query, split.fragment))
+_REDACTED = "REDACTED"
+# A setting is secret when its name contains one of these (password, sslpassword, passfile, ...),
+# or when its value mentions a password (``options=-c password=...``). Over-redacting is safe.
+_SECRET_NAME_PARTS = ("pass", "pwd", "secret", "token")
+# libpq conninfo: ``key = value``, where value is a single-quoted string with backslash escapes
+# or a run of non-space characters.
+_CONNINFO_PAIR = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*('(?:[^'\\]|\\.)*'|[^\s']\S*)\s*")
 
+
+def _is_secret_setting(key: str, value: str) -> bool:
+    name = key.lower()
+    return any(part in name for part in _SECRET_NAME_PARTS) or "pass" in value.lower()
+
+
+def _redact_url_dsn(dsn: str) -> str:
+    split = urlsplit(dsn)
+    # An unencoded "#" or "?" in a password moves the rest of it into the fragment or query, where
+    # it would be shown. A connection string has no fragment, and "@" after the host means the
+    # split went wrong, so either makes the whole string unparseable.
+    if split.fragment or "@" in split.path or "@" in split.query:
+        raise ValueError("unparseable connection string")
+    if split.port is not None and not 0 <= split.port <= 65535:
+        raise ValueError("port out of range")
+    hostport = split.netloc.rpartition("@")[2]
+    netloc = ""
+    if split.username:
+        netloc = quote(split.username, safe="")
+        if split.password is not None:
+            netloc += ":" + _REDACTED
+        netloc += "@"
+    elif split.password is not None:
+        netloc = ":" + _REDACTED + "@"
+    netloc += hostport
+    query_pairs = [
+        (key, _REDACTED if _is_secret_setting(key, value) else value)
+        for key, value in parse_qsl(split.query, keep_blank_values=True)
+    ]
+    return urlunsplit((split.scheme, netloc, split.path, urlencode(query_pairs), ""))
+
+
+def _redact_conninfo(dsn: str) -> str:
     parts = []
-    for token in dsn.split():
-        if "=" not in token:
-            parts.append(token)
-            continue
-        key, value = token.split("=", 1)
-        if key.lower() in {"password", "pass", "pwd"}:
-            parts.append(f"{key}=REDACTED")
-        else:
-            parts.append(f"{key}={value}")
+    position = 0
+    while position < len(dsn):
+        match = _CONNINFO_PAIR.match(dsn, position)
+        if match is None or match.end() == position:
+            raise ValueError("unparseable connection string")
+        key, value = match.group(1), match.group(2)
+        parts.append(f"{key}={_REDACTED if _is_secret_setting(key, value) else value}")
+        position = match.end()
     return " ".join(parts)
+
+
+def redact_dsn(dsn: str) -> str:
+    """Return ``dsn`` with every password-like setting replaced by ``REDACTED``.
+
+    Handles URL connection strings and libpq ``key=value`` strings. Anything it cannot parse is
+    redacted whole, so a malformed string never reaches the output.
+    """
+    try:
+        if "://" in dsn:
+            return _redact_url_dsn(dsn)
+        return _redact_conninfo(dsn)
+    except ValueError:
+        return _REDACTED

@@ -62,6 +62,11 @@ Compatibility notes before upgrading.**
   table again before changing it; a table that already has the key is not locked, so a sink role
   with only SELECT and INSERT still starts. The PostgreSQL change was checked against a real
   PostgreSQL 16 server; the MySQL change was not tested against a real MySQL server.
+- **`redact_dsn` could show part of a database password.** It missed `sslpassword`, a
+  `password = value` setting written with spaces, the rest of a quoted password, and text after an
+  unencoded `#` or `?` in a password; a bad port raised an error. Every password-like setting is
+  now redacted, and a connection string it cannot parse is shown as `REDACTED`. It is used by
+  `scripts/log_token_tool.py --verbose`.
 - **The receiver could be worked around or held up.** A second `Authorization` header could dodge
   the per-token rate limit (now 400); one partner could upload for another's install (now 403);
   slow clients could hold connections indefinitely (now a 60 s deadline and a 32-connection cap);
