@@ -58,8 +58,10 @@ Compatibility notes before upgrading.**
 - **SQL writers mishandled two database errors.** A MySQL/MariaDB duplicate entry (error 1062)
   was not recognised as a duplicate, and two PostgreSQL writers starting together on a table that
   still needed its idempotency key could fail with "already exists". 1062 is now a duplicate
-  (SQLSTATE 23000 alone never is), and the PostgreSQL upgrade takes a table lock first. Neither was
-  tested against a real server.
+  (SQLSTATE 23000 alone never is). The PostgreSQL upgrade now takes a table lock and inspects the
+  table again before changing it; a table that already has the key is not locked, so a sink role
+  with only SELECT and INSERT still starts. The PostgreSQL change was checked against a real
+  PostgreSQL 16 server; the MySQL change was not tested against a real MySQL server.
 - **The receiver could be worked around or held up.** A second `Authorization` header could dodge
   the per-token rate limit (now 400); one partner could upload for another's install (now 403);
   slow clients could hold connections indefinitely (now a 60 s deadline and a 32-connection cap);
