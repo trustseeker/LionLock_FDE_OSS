@@ -34,6 +34,8 @@ HOST = "db.example.com"
         f"host=db.example.com user=user password=a://{SECRET} dbname=ll",
         f"host=db.example.com user=user password=abc\\ x={SECRET} dbname=ll",
         f"host=db.example.com user=user password={SECRET}\\",
+        f"host=db.example.com options=-c\\ p\\assword={SECRET}",
+        f"host=db.example.com options='-c p\\assword={SECRET}'",
         f"postgresql://user:pa?{SECRET}@{HOST}/ll",
     ],
 )
@@ -57,6 +59,12 @@ def test_backslash_escaped_space_stays_inside_the_value() -> None:
     assert (
         redact_dsn(f"host=db.example.com password=ab\\ {SECRET} dbname=ll")
         == "host=db.example.com password=REDACTED dbname=ll"
+    )
+
+
+def test_a_value_that_is_not_secret_keeps_its_spelling() -> None:
+    assert redact_dsn("host=db.example.com application_name=my\\ app") == (
+        "host=db.example.com application_name=my\\ app"
     )
 
 

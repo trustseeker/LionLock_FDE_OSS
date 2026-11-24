@@ -241,6 +241,13 @@ def _redact_url_dsn(dsn: str) -> str:
     return f"{split.scheme}://{netloc}{split.path}" + (f"?{query}" if query else "")
 
 
+def _conninfo_value(raw: str) -> str:
+    """The value libpq sees: quotes removed and backslash escapes decoded ("p\\ass" is "pass")."""
+    if raw.startswith("'"):
+        raw = raw[1:-1]
+    return re.sub(r"\\(.)", r"\1", raw, flags=re.DOTALL)
+
+
 def _redact_conninfo(dsn: str) -> str:
     parts = []
     position = 0
@@ -249,7 +256,10 @@ def _redact_conninfo(dsn: str) -> str:
         if match is None or match.end() == position:
             raise ValueError("unparseable connection string")
         key, value = match.group(1), match.group(2)
-        parts.append(f"{key}={_REDACTED if _is_secret_setting(key, value) else value}")
+        # Classify the decoded value, so escapes cannot split a word such as "password"; a value
+        # that is not secret keeps its original spelling.
+        secret = _is_secret_setting(key, _conninfo_value(value))
+        parts.append(f"{key}={_REDACTED if secret else value}")
         position = match.end()
     return " ".join(parts)
 
