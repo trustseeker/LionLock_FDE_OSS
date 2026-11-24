@@ -3,10 +3,11 @@ from __future__ import annotations
 import copy
 import math
 import os
-import tomllib
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
+
+import tomllib
 
 from lionlock.core.scoring import DEFAULT_SIGNAL_WEIGHTS
 from lionlock.logging.connection import build_postgres_dsn

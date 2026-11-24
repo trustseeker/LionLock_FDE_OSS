@@ -19,7 +19,6 @@ import subprocess
 import sys
 import threading
 import time
-import tomllib
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Sequence, Tuple
 
 import pytest
+import tomllib
 
 from lionlock.logging.token_auth import hash_token
 from lionlock.telemetry import export as export_module

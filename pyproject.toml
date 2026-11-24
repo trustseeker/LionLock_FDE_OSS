@@ -71,7 +71,9 @@ addopts = "-q"
 [tool.ruff]
 exclude = ["archive", ".venv", "venv", "build", "dist"]
 line-length = 100
-target-version = "py311"
+# Stays py310 although Python 3.11 is the minimum: at py311 ruff sorts tomllib with the standard
+# library, which would re-sort imports in the protected harness.
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
