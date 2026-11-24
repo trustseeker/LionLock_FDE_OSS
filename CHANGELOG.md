@@ -63,9 +63,10 @@ Compatibility notes before upgrading.**
   with only SELECT and INSERT still starts. The PostgreSQL change was checked against a real
   PostgreSQL 16 server; the MySQL change was not tested against a real MySQL server.
 - **`redact_dsn` could show part of a database password.** It missed `sslpassword`, a
-  `password = value` setting written with spaces, the rest of a quoted password, and text after an
-  unencoded `#` or `?` in a password; a bad port raised an error. Every password-like setting is
-  now redacted, and a connection string it cannot parse is shown as `REDACTED`. It is used by
+  `password = value` setting written with spaces, the rest of a quoted password or of one with a
+  backslash-escaped space, text after an unencoded `#` or `?` in a password, and any key=value
+  string whose password contained `://`; a bad port raised an error. Every password-like setting
+  is now redacted, and a connection string it cannot parse is shown as `REDACTED`. It is used by
   `scripts/log_token_tool.py --verbose`.
 - **The receiver could be worked around or held up.** A second `Authorization` header could dodge
   the per-token rate limit (now 400); one partner could upload for another's install (now 403);
@@ -192,9 +193,10 @@ Compatibility notes before upgrading.**
   3.10 gone, `tomli` is no longer installed; LionLock reads TOML with the standard library.
 - **The payload validation classes are LionLock's own.** `SignalPayload` and `SignalMetadata` in
   `lionlock.signal_schemas` are no longer pydantic models, and validation raises
-  `lionlock.signal_schemas.ValidationError`, a `ValueError`, instead of pydantic's. Their
-  `model_validate` and `model_dump` remain; pydantic-only methods such as `model_json_schema` and
-  `model_dump_json` do not. `score_payload` and `score_response` behave as before.
+  `lionlock.signal_schemas.ValidationError`, a `ValueError`, instead of pydantic's.
+  `SignalPayload.model_validate` and `SignalMetadata.model_dump` remain; pydantic-only methods such
+  as `model_json_schema` and `model_dump_json` do not. `score_payload` and `score_response` behave
+  as before.
 - **`pydantic` is no longer installed with LionLock.** If your own code imports it and relied on
   LionLock to install it, add it to your own requirements.
 - The optional `failsafe` extra now needs `cryptography>=50.0.2` (it allowed `>=42`). Every

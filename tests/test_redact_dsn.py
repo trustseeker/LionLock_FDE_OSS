@@ -31,6 +31,9 @@ HOST = "db.example.com"
         f"host=db.example.com sslpassword={SECRET}",
         f"host=db.example.com user=user password='{SECRET}",
         f"postgresql://user:12#{SECRET}@{HOST}/ll",
+        f"host=db.example.com user=user password=a://{SECRET} dbname=ll",
+        f"host=db.example.com user=user password=abc\\ x={SECRET} dbname=ll",
+        f"host=db.example.com user=user password={SECRET}\\",
         f"postgresql://user:pa?{SECRET}@{HOST}/ll",
     ],
 )
@@ -47,6 +50,18 @@ def test_useful_parts_are_kept() -> None:
         redact_dsn(f"host=db.example.com user=user password = '{SECRET} x' dbname=ll")
         == "host=db.example.com user=user password=REDACTED dbname=ll"
     )
+
+
+def test_backslash_escaped_space_stays_inside_the_value() -> None:
+    # libpq lets an unquoted value contain an escaped space: "ab\\ cd" is one value.
+    assert (
+        redact_dsn(f"host=db.example.com password=ab\\ {SECRET} dbname=ll")
+        == "host=db.example.com password=REDACTED dbname=ll"
+    )
+
+
+def test_a_url_without_a_host_keeps_its_double_slash() -> None:
+    assert redact_dsn("sqlite:///tmp/telemetry.db") == "sqlite:///tmp/telemetry.db"
 
 
 def test_ipv6_host_keeps_its_brackets() -> None:

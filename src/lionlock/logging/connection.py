@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -196,9 +196,15 @@ _REDACTED = "REDACTED"
 # A setting is secret when its name contains one of these (password, sslpassword, passfile, ...),
 # or when its value mentions a password (``options=-c password=...``). Over-redacting is safe.
 _SECRET_NAME_PARTS = ("pass", "pwd", "secret", "token")
-# libpq conninfo: ``key = value``, where value is a single-quoted string with backslash escapes
-# or a run of non-space characters.
-_CONNINFO_PAIR = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*('(?:[^'\\]|\\.)*'|[^\s']\S*)\s*")
+# libpq conninfo: ``key = value``, where value is a single-quoted string, or an unquoted run of
+# characters ending at whitespace. Both forms take backslash escapes, so "ab\ cd" is one value.
+_CONNINFO_PAIR = re.compile(
+    r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"('(?:[^'\\]|\\.)*'|(?:[^\s'\\]|\\.)(?:[^\s\\]|\\.)*)\s*"
+)
+# A URL connection string starts with its scheme. "://" elsewhere (inside a conninfo value, for
+# example) does not make a string a URL.
+_URL_DSN = re.compile(r"\s*[A-Za-z][A-Za-z0-9+.-]*://")
 
 
 def _is_secret_setting(key: str, value: str) -> bool:
@@ -229,7 +235,10 @@ def _redact_url_dsn(dsn: str) -> str:
         (key, _REDACTED if _is_secret_setting(key, value) else value)
         for key, value in parse_qsl(split.query, keep_blank_values=True)
     ]
-    return urlunsplit((split.scheme, netloc, split.path, urlencode(query_pairs), ""))
+    # Built by hand rather than with urlunsplit, which drops the "//" of an empty host
+    # ("sqlite:///x.db" would be shown as "sqlite:/x.db").
+    query = urlencode(query_pairs)
+    return f"{split.scheme}://{netloc}{split.path}" + (f"?{query}" if query else "")
 
 
 def _redact_conninfo(dsn: str) -> str:
@@ -252,7 +261,7 @@ def redact_dsn(dsn: str) -> str:
     redacted whole, so a malformed string never reaches the output.
     """
     try:
-        if "://" in dsn:
+        if _URL_DSN.match(dsn):
             return _redact_url_dsn(dsn)
         return _redact_conninfo(dsn)
     except ValueError:
