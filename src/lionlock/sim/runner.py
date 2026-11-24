@@ -8,11 +8,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
 
 from lionlock import config as lionlock_config
 from lionlock.core import gating as gating_module
@@ -23,6 +18,7 @@ from lionlock.logging.connection import validate_identifier
 from lionlock.replay import policy_registry
 from lionlock.trust_overlay import resolve_trust_logic_version
 from lionlock.trust_overlay.versioning import code_fingerprint
+from lionlock.utils.sql_optional import load_sqlalchemy
 
 from . import labels as labels_module
 from . import reporting
@@ -113,6 +109,7 @@ def _ensure_sqlite_parent(uri: str) -> None:
 
 
 def _test_postgres_connection(uri: str, *, timeout_s: float = 1.0) -> None:
+    create_engine, text = load_sqlalchemy()
     if create_engine is None or text is None:
         raise RuntimeError("SQLAlchemy required for postgres connectivity tests.")
     connect_args = {"connect_timeout": max(1, int(round(timeout_s)))}
@@ -246,6 +243,7 @@ def _existing_append_indexes(uri: str, schema: str, base_run_id: str) -> List[in
                 (len(prefix), prefix),
             ).fetchall()
     else:
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             raise RuntimeError("SQLAlchemy required for non-sqlite append runs.")
         validate_identifier(schema, "schema")
@@ -437,6 +435,7 @@ def _delete_run_rows(uri: str, schema: str, run_id: str) -> None:
             conn.commit()
         return
 
+    create_engine, text = load_sqlalchemy()
     if create_engine is None or text is None:
         raise RuntimeError("SQLAlchemy required for non-sqlite deletes.")
     validate_identifier(schema, "schema")

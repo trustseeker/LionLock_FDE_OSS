@@ -6,15 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
 
 from lionlock.core.models import canonical_gating_decision
 from lionlock.logging.privacy import find_forbidden_content, scrub_forbidden_keys
 from lionlock.logging.connection import validate_identifier
+from lionlock.utils.sql_optional import load_sqlalchemy
 
 
 ALLOWED_DECISIONS = {"ALLOW", "REFRESH", "BLOCK"}
@@ -170,6 +166,7 @@ def _load_labels_from_db(
             if conn is not None:
                 conn.close()
     else:
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             raise ValueError("SQLAlchemy not installed; cannot read labels table.")
         validate_identifier(schema, "schema")

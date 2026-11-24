@@ -52,6 +52,11 @@ def create_writer_key_index_sql(table: str) -> str:
     return f"CREATE UNIQUE INDEX {writer_key_index(table)} ON {table} ({', '.join(_KEY_NAMES)})"
 
 
+def lock_table_for_key_upgrade_sql(table: str) -> str:
+    """PostgreSQL: serialise writers upgrading ``table``; plain SELECTs still run."""
+    return f"LOCK TABLE {_checked(table)} IN SHARE ROW EXCLUSIVE MODE"
+
+
 def create_writers_table_sql() -> str:
     columns = ", ".join(f"{name} {definition}" for name, definition in WRITERS_COLUMNS)
     return f"CREATE TABLE IF NOT EXISTS {WRITERS_TABLE} ({columns})"
@@ -171,8 +176,20 @@ def ensure_sqlalchemy_writer_key(conn: Any, table: str, base_columns: Sequence[s
     """Add the key columns and UNIQUE index ``table`` lacks, inside the caller's transaction."""
     from sqlalchemy import inspect, text
 
-    existing = [column["name"] for column in inspect(conn).get_columns(table)]
-    for definition in _key_columns_to_add(table, existing, base_columns):
+    def columns_to_add() -> List[str]:
+        existing = [column["name"] for column in inspect(conn).get_columns(table)]
+        return _key_columns_to_add(table, existing, base_columns)
+
+    if conn.dialect.name == "postgresql":
+        # A table that already has the key needs nothing, and is not locked: SHARE ROW
+        # EXCLUSIVE needs UPDATE, DELETE or TRUNCATE, which a SELECT-and-INSERT role lacks.
+        if not columns_to_add() and _sqlalchemy_has_writer_key_index(conn, table):
+            return
+        # Two writers starting together on a table without the key would both pass the
+        # inspection above, and the second ADD COLUMN or CREATE INDEX would fail with "already
+        # exists". The lock makes the second wait, then inspect the first one's committed result.
+        conn.execute(text(lock_table_for_key_upgrade_sql(table)))
+    for definition in columns_to_add():
         conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {definition}"))
     if not _sqlalchemy_has_writer_key_index(conn, table):
         conn.execute(text(create_writer_key_index_sql(table)))

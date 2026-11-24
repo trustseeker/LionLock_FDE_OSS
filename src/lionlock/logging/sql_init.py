@@ -4,13 +4,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
-
 from lionlock.logging.connection import validate_identifier
+from lionlock.utils.sql_optional import load_sqlalchemy
 
 MANDATORY_FIELDS = (
     "session_id",
@@ -209,6 +204,7 @@ def _ensure_postgres_columns(
     table: str,
     columns: Iterable[Tuple[str, str]],
 ) -> None:
+    _, text = load_sqlalchemy()
     if text is None:
         raise RuntimeError("SQLAlchemy required for Postgres column checks.")
     validate_identifier(schema, "schema")
@@ -255,6 +251,7 @@ def init_schema(uri_or_dsn: str, *, schema: str = "public") -> Tuple[bool, str]:
         except Exception as exc:
             return False, f"SQLite schema init failed: {exc}"
 
+    create_engine, text = load_sqlalchemy()
     if create_engine is None or text is None:
         ok, message = _init_postgres_schema_via_psycopg(uri_or_dsn, schema=schema)
         return ok, message

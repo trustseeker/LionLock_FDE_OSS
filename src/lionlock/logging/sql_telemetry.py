@@ -7,12 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore[assignment]
-    text = None  # type: ignore[assignment]
-
 from lionlock.core.models import canonical_gating_decision
 from lionlock.utils.sql_batch_writer import (
     DEFAULT_MAX_RETRIES,
@@ -21,6 +15,7 @@ from lionlock.utils.sql_batch_writer import (
     QueuedEvent,
     SQLBatchWriter,
 )
+from lionlock.utils.sql_optional import load_sqlalchemy
 from lionlock.utils.sql_writer_keys import (
     WRITER_KEY_COLUMNS,
     WRITERS_COLUMNS,
@@ -280,6 +275,7 @@ def _sqlite_telemetry_transaction(
 
 
 def _init_sqlalchemy_table(uri: str, table: str, columns: Iterable[Tuple[str, str]]) -> None:
+    create_engine, text = load_sqlalchemy()
     if create_engine is None or text is None:
         raise RuntimeError("SQLAlchemy is required for non-sqlite URIs.")
     engine = create_engine(uri)
@@ -291,6 +287,7 @@ def _init_sqlalchemy_table(uri: str, table: str, columns: Iterable[Tuple[str, st
 def _init_sqlalchemy_tables(engine: Any, sessions_table: str, table: str) -> None:
     """Create the sessions, signals and writers tables, and give the signals table its
     writer key, in one transaction."""
+    _, text = load_sqlalchemy()
     if text is None:
         raise RuntimeError("SQLAlchemy is required for non-sqlite URIs.")
     base = [name for name, _ in PUBLIC_SIGNALS_COLUMNS[: -len(WRITER_KEY_COLUMNS)]]
@@ -329,6 +326,7 @@ def init_db(
             with _sqlite_telemetry_transaction(sqlite_path, required):
                 pass
             return True, "Initialized sqlite tables."
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot initialize non-sqlite URI."
         engine = create_engine(uri)
@@ -435,7 +433,7 @@ class SQLTelemetryWriter(SQLBatchWriter):
         except ValueError as exc:
             self._disable(f"SQL telemetry init failed: {exc}")
             return
-        if self.sqlite_path is None and (create_engine is None or text is None):
+        if self.sqlite_path is None and load_sqlalchemy()[0] is None:
             self._disable("SQLAlchemy not installed; SQL telemetry disabled.")
             return
         self._init_tables()
@@ -456,6 +454,7 @@ class SQLTelemetryWriter(SQLBatchWriter):
                 ) as conn:
                     self.writer_id = claim_writer_id_sqlite(conn, self.sink_name, self.table)
             else:
+                create_engine, text = load_sqlalchemy()
                 if create_engine is None or text is None:
                     raise RuntimeError("SQLAlchemy not installed.")
                 self.engine = create_engine(self.uri)
@@ -479,6 +478,7 @@ class SQLTelemetryWriter(SQLBatchWriter):
                 conn.executemany(sql, rows)
                 self._commit(conn.commit)
             return
+        _, text = load_sqlalchemy()
         if self.engine is None or text is None:
             raise RuntimeError("SQLAlchemy not installed.")
         values = ",".join(f":{name}" for name in columns.split(","))
@@ -503,6 +503,7 @@ class SQLTelemetryWriter(SQLBatchWriter):
             with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
                 rows = conn.execute(sql, params).fetchall()
         else:
+            _, text = load_sqlalchemy()
             if self.engine is None or text is None:
                 raise RuntimeError("SQLAlchemy not installed.")
             with self.engine.connect() as conn:
@@ -690,6 +691,7 @@ def begin_session(
                     (session_id,),
                 ).fetchone()
                 return int(row[0]) if row else None
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             return None
         engine = create_engine(uri)
@@ -785,6 +787,7 @@ def update_session_anomalies(
                     ),
                 )
             return
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             return
         engine = create_engine(uri)
@@ -842,6 +845,7 @@ def write_failsafe_blob(
                 )
                 conn.execute(sql_stmt, (timestamp_utc, request_id, payload_b64))
             return True, "Failsafe SQL insert ok."
+        create_engine, text = load_sqlalchemy()
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot write failsafe SQL."
         _init_sqlalchemy_table(uri, table, FAILSAFE_COLUMNS)
