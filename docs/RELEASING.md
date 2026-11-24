@@ -2,15 +2,21 @@
 
 ## Current status
 
-On 19 November 2026, the PyPI JSON API listed only `1.0.0b1`, and GitHub listed only
-`v1.0.0b1`. A README version, a GitHub release and an installed source version do not prove PyPI
-availability.
+`1.0.0b2` was published to PyPI on 25 November 2026 (AEDT) from tag `v1.0.0b2`, commit
+`efa1e53`, by the
+[publish workflow](https://github.com/trustseeker/LionLock_FDE_OSS/actions/runs/45480304575)
+after a maintainer approved the `pypi` deployment. It includes everything in
+[CHANGELOG.md](../CHANGELOG.md). The files on PyPI were read back and match an independent
+reproducible build of that commit, and PyPI's provenance names this repository, `publish.yml` and
+the `pypi` environment:
 
-`1.0.0b2` is released from the commit that merges the release pull request, tagged `v1.0.0b2`;
-it includes everything in [CHANGELOG.md](../CHANGELOG.md). The [README](../README.md) is also
-the PyPI project description, which cannot change after upload, so it leads with the PyPI command
-and keeps the tag install as the fallback until PyPI lists the release. The site installs the tag
-until step 5 below. An earlier pre-release source commit,
+- wheel `lionlock-1.0.0b2-py3-none-any.whl`: sha256
+  `878de55029449acb5298d82db8158355e989e500106075eadbbe880fa9873f85`
+- sdist `lionlock-1.0.0b2.tar.gz`: sha256
+  `0ccad9860ef67770f1247a1b987014b0c71a5ff78d5fa42da9524e304dd9bda9`
+
+The [README](../README.md) is also the PyPI project description, which cannot change after
+upload, so it leads with the PyPI command. An earlier pre-release source commit,
 `05434565`, also declared `1.0.0b2`; it lacks the November 2026 fixes and must not be used.
 
 ## Before creating the release
