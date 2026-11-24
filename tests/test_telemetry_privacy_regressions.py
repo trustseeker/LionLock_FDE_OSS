@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -61,11 +62,6 @@ from lionlock.telemetry.upload import (
     upload_pending,
     upload_snapshot,
 )
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10; tomli is a declared dependency there
-    import tomli as tomllib
 
 APPENDED_CANARY = b"SYNTHETIC_PRIVATE_ASSET_CANARY_APPENDED_ONLY"
 RESIDUE_CANARY = b"SYNTHETIC_PRIVATE_ASSET_CANARY_DELETED_RESIDUE"

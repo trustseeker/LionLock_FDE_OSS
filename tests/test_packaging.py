@@ -75,17 +75,18 @@ def test_release_smoke_script_passes() -> None:
 
 
 def _pyproject() -> dict:
-    if sys.version_info >= (3, 11):
-        import tomllib
-    else:
-        import tomli as tomllib
+    import tomllib
+
     return tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
 
 
-def test_runtime_dependencies_are_only_what_the_runtime_imports() -> None:
+def test_the_runtime_has_no_third_party_dependencies() -> None:
     # Pydantic left the runtime in 1.0.0b2; installing it anyway adds a compiled third-party
-    # extension, and a plugin loader, to every installation for nothing.
-    assert _pyproject()["project"]["dependencies"] == ['tomli>=2.0.0; python_version < "3.11"']
+    # extension, and a plugin loader, to every installation for nothing. tomllib replaces tomli
+    # now that Python 3.11 is the minimum.
+    project = _pyproject()["project"]
+    assert project["dependencies"] == []
+    assert project["requires-python"] == ">=3.11"
 
 
 def test_license_is_an_spdx_expression() -> None:

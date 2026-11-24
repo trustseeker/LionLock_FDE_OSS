@@ -158,9 +158,9 @@ Compatibility notes before upgrading.**
 - `lionlock-sim --append-run` ids are `<id>-<n>`; the sim report gains an `inputs` block marking its
   sessions as synthetic, and coverage keys are renamed `*_input_high`.
 - Validation errors no longer echo their input. Pydantic is no longer used at runtime, and is no
-  longer installed with LionLock: the only runtime dependency is `tomli`, below Python 3.11.
+  longer installed with LionLock. LionLock now has no runtime dependencies.
 - Package metadata: the licence is the SPDX expression `Apache-2.0`, and the supported Python
-  versions (3.10 to 3.14) are listed. The README, which PyPI shows as the project description,
+  versions (3.11 to 3.14) are listed. The README, which PyPI shows as the project description,
   uses absolute links so they work there.
 - Optional SQLAlchemy is imported only when a SQLAlchemy code path runs, so importing the SQL
   sinks, readers or simulator no longer loads it.
@@ -186,11 +186,20 @@ Compatibility notes before upgrading.**
 
 ### Compatibility
 
+- **Python 3.11 or newer is required.** Python 3.10 reached its end of life in October 2026 and no
+  longer receives security fixes. pip on Python 3.10 cannot install 1.0.0b2, and an unpinned
+  install there falls back to 1.0.0b1, which lacks the fixes above: upgrade Python first. With
+  3.10 gone, `tomli` is no longer installed; LionLock reads TOML with the standard library.
+- **The payload validation classes are LionLock's own.** `SignalPayload` and `SignalMetadata` in
+  `lionlock.signal_schemas` are no longer pydantic models, and validation raises
+  `lionlock.signal_schemas.ValidationError`, a `ValueError`, instead of pydantic's. Their
+  `model_validate` and `model_dump` remain; pydantic-only methods such as `model_json_schema` and
+  `model_dump_json` do not. `score_payload` and `score_response` behave as before.
 - **`pydantic` is no longer installed with LionLock.** If your own code imports it and relied on
   LionLock to install it, add it to your own requirements.
 - The optional `failsafe` extra now needs `cryptography>=50.0.2` (it allowed `>=42`). Every
   earlier `cryptography` release has published vulnerabilities; 50.0.2 has none and supports
-  Python 3.10 to 3.14.
+  Python 3.11 to 3.14.
 - **Configs and policies that loaded before may now be refused**, with an error naming the bad
   setting. Finite scores outside `[0, 1]` are now refused instead of clamped. A `severity` of `red` can now come with a `REFRESH` or `ALLOW` action; read
   `policy_adjustment`. `trigger_signal` and `reason_code` can differ, because attribution is now

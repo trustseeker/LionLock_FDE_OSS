@@ -58,7 +58,7 @@ These are in scope. Each one is a property LionLock claims, so a counter-example
   includes raising a score that lowers the action, or an invalid setting that is accepted instead
   of refused.
 - **Non-determinism.** The same input and policy giving a different decision or score across runs,
-  machines, environment settings or supported Python versions (3.10 to 3.14).
+  machines, environment settings or supported Python versions (3.11 to 3.14).
 - **Network or AI in the runtime.** Scoring or gating opening a network connection, or loading a
   machine-learning framework.
 - **Audit-log integrity.** An edit, reordering or removal inside a TrustVault log that

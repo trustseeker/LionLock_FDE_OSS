@@ -45,7 +45,7 @@ Runs generated sessions through a policy to compare profiles and gating threshol
 ## 🚀 Get Started
 
 Install from [PyPI](https://pypi.org/project/lionlock/) into a fresh virtual environment
-(Python 3.10 or newer). This installs the library and both commands, `lionlock-telemetry` and
+(Python 3.11 or newer). This installs the library and both commands, `lionlock-telemetry` and
 `lionlock-sim`:
 
 ```bash

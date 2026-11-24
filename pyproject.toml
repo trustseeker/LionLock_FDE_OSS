@@ -7,13 +7,11 @@ name = "lionlock"
 version = "1.0.0b2"
 description = "Deterministic, non-AI scoring and gating of LLM replies, with a hash-chained local audit log."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "LionLock Maintainers" }]
-dependencies = [
-  "tomli>=2.0.0; python_version < \"3.11\"",
-]
+dependencies = []
 keywords = ["llm", "guardrails", "deterministic", "audit-log", "gating", "ai-safety"]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -21,7 +19,6 @@ classifiers = [
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -74,13 +71,13 @@ addopts = "-q"
 [tool.ruff]
 exclude = ["archive", ".venv", "venv", "build", "dist"]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_ignores = true
 no_implicit_optional = true

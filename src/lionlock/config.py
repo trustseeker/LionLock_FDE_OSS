@@ -3,17 +3,13 @@ from __future__ import annotations
 import copy
 import math
 import os
+import tomllib
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 from lionlock.core.scoring import DEFAULT_SIGNAL_WEIGHTS
 from lionlock.logging.connection import build_postgres_dsn
-
-try:
-    import tomllib  # py>=3.11
-except ModuleNotFoundError:  # pragma: no cover - fallback for older runtimes
-    import tomli as tomllib
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "llm": {

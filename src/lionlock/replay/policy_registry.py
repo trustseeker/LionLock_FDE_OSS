@@ -1,16 +1,12 @@
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
 from lionlock import config as lionlock_config
 from lionlock.logging.event_log import config_hash_from
-
-try:
-    import tomllib  # py>=3.11
-except ModuleNotFoundError:  # pragma: no cover - fallback for older runtimes
-    import tomli as tomllib
 
 
 @dataclass(frozen=True)
