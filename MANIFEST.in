@@ -6,7 +6,7 @@ graft docs
 graft examples
 graft tests
 graft scripts
-# These tests check the repository's own tooling (verification harness, tools/venv_guard.sh), which
-# is not part of the package, so they cannot pass from an unpacked sdist.
-exclude tests/test_harness_porcelain.py tests/test_venv_guard.py
+# These tests check the repository's own tooling (verification harness, tools/venv_guard.sh, the
+# publish workflow), which is not part of the package, so they cannot pass from an unpacked sdist.
+exclude tests/test_harness_porcelain.py tests/test_venv_guard.py tests/test_publish_workflow.py
 global-exclude __pycache__ *.py[cod] *.db *.sqlite *.sqlite3 *.jsonl .DS_Store

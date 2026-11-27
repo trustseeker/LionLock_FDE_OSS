@@ -152,6 +152,30 @@ jobs:
           "$RUNNER_TEMP/venv/bin/python" -m lionlock.sample_data
           "$RUNNER_TEMP/venv/bin/python" -c 'import importlib.metadata as m; print("lionlock", m.version("lionlock"))'
 
+      # The sdist is uploaded too, and pip builds from it wherever the wheel is not used (for
+      # example with --no-binary). Install it on its own, in a second fresh environment outside the
+      # checkout, and run the same smoke steps, so a broken sdist cannot reach PyPI either.
+      - name: Create a second fresh environment for the sdist
+        run: python -m venv "$RUNNER_TEMP/venv-sdist"
+
+      - name: Install the sdist
+        run: '"$RUNNER_TEMP/venv-sdist/bin/python" -m pip install dist/*.tar.gz'
+
+      - name: pip check (sdist)
+        run: '"$RUNNER_TEMP/venv-sdist/bin/python" -m pip check'
+
+      - name: Smoke test the installed sdist
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          smoke="$PWD/scripts/release_smoke.py"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv-sdist/bin/python" "$smoke" "${TAG#v}"
+          "$RUNNER_TEMP/venv-sdist/bin/lionlock-telemetry" --help
+          "$RUNNER_TEMP/venv-sdist/bin/lionlock-sim" --help
+          "$RUNNER_TEMP/venv-sdist/bin/python" -m lionlock.sample_data
+          "$RUNNER_TEMP/venv-sdist/bin/python" -c 'import importlib.metadata as m; print("lionlock", m.version("lionlock"))'
+
   publish:
     needs: [build, test-dist]
     runs-on: ubuntu-latest
