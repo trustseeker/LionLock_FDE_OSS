@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Optional `sql` and `postgres` extras.** `pip install "lionlock[sql]"` adds SQLAlchemy, which
+  the SQL sinks and readers use for any URI except `sqlite:///...`. `pip install
+  "lionlock[postgres]"` adds SQLAlchemy and psycopg, the PostgreSQL driver that SQLAlchemy and the
+  token allowlist use. Until now these had to be found and installed by hand. Both extras require
+  SQLAlchemy 2.1 or later, the first release that uses psycopg for a `postgresql://` URI (2.0
+  uses psycopg2, which LionLock does not install). psycopg must be 3.2.10 or later, the first
+  release that supports Python 3.14. On 25 November 2026 PyPI listed no security advisories for
+  any release these ranges allow. A plain `pip install lionlock` still installs no other package.
+
 ## 1.0.0b2 — 25 November 2026 — security, integrity and data-preservation fixes
 
 Recommended for everyone on `1.0.0b1`. That release was published before everything below, so an

@@ -89,6 +89,26 @@ cd LionLock_FDE_OSS
 bash tools/dev_setup.sh
 ```
 
+### Optional extras
+
+The library, both commands and the local `sqlite:///...` log need only the Python standard
+library. Using any other database needs one of these extras:
+
+| Extra | Adds | Needed for |
+| --- | --- | --- |
+| `sql` | SQLAlchemy 2.1 or later | A SQL sink or reader given any URI except `sqlite:///...`, for example `sqlite+pysqlite:///...`. SQLAlchemy includes no database drivers, so install your database's driver too. |
+| `postgres` | SQLAlchemy 2.1 or later, and psycopg 3.2.10 or later | PostgreSQL: SQL sinks and readers given a `postgresql://` URI, and a token allowlist kept in PostgreSQL (`LIONLOCK_LOG_TOKEN_DB_URI`). |
+
+```bash
+python -m pip install "lionlock[postgres]"
+```
+
+Both extras are new after `1.0.0b2`: pip warns that `1.0.0b2` does not provide them and installs
+neither package. `postgres` installs psycopg's binary package, which bundles its own libpq. To use
+the system's libpq instead, install `lionlock[sql]` and `psycopg[c]` as described in
+[psycopg's installation guide](https://www.psycopg.org/psycopg3/docs/basic/install.html).
+LionLock does not need psycopg2.
+
 Config templates: [`lionlock.toml.example`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/lionlock.toml.example) and, for database connection settings only, [`.env.example`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/.env.example). Gating is set in `lionlock.toml` or the real environment. A `.env` that LionLock finds by itself never sets gating; one you load explicitly with `load_dotenv(path)` can.
 
 Five-minute walkthrough: [`docs/QUICKSTART.md`](https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/docs/QUICKSTART.md).
