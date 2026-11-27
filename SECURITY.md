@@ -101,8 +101,8 @@ data you do not own.
 - The workflow refuses a tag that does not match the version in `pyproject.toml`. It builds with
   `scripts/reproducible_build.py`, checks both files with `twine check --strict`, and checks that
   there is exactly one wheel and one sdist, named for the tag's version. It then installs the exact
-  wheel in a fresh environment outside the checkout and runs its smoke tests before the upload job
-  can start. The sdist is checked but not installed by the workflow.
+  wheel in a fresh environment outside the checkout, and the exact sdist in a second fresh
+  environment, and runs the same smoke tests against each before the upload job can start.
 - Only the publish job can request a PyPI identity token. The build and test jobs cannot, and the
   publish job runs in the protected `pypi` deployment environment, which waits for a maintainer's
   approval.

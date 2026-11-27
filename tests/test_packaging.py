@@ -89,6 +89,20 @@ def test_the_runtime_has_no_third_party_dependencies() -> None:
     assert project["requires-python"] == ">=3.11"
 
 
+def _requirement_names(requirements: list[str]) -> set[str]:
+    import re
+
+    return {re.split(r"[\[<>=!~;\s]", item, maxsplit=1)[0].lower() for item in requirements}
+
+
+def test_streamlit_is_in_the_gui_extra_only() -> None:
+    # The dev extra is what contributors and CI tooling install; Streamlit (and the large stack
+    # it pulls in) is only for the optional GUI, so it belongs to the gui extra alone.
+    extras = _pyproject()["project"]["optional-dependencies"]
+    assert "streamlit" not in _requirement_names(extras["dev"])
+    assert "streamlit" in _requirement_names(extras["gui"])
+
+
 def test_license_is_an_spdx_expression() -> None:
     project = _pyproject()["project"]
     assert project["license"] == "Apache-2.0"

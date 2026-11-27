@@ -1,0 +1,51 @@
+name: arm64-determinism
+
+# The verify workflow runs on x86-64 only. This runs the two done specs on 64-bit ARM, so a result
+# that depended on the CPU, or on the libm and zlib builds that come with it, would show up as a
+# fingerprint that differs from the golden. Each spec must print the same FINGERPRINT here as on
+# x86-64: LL-0001 dab6e2cd57b6..., LL-0002 bc7e5da2220d...
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only: this inspects the checkout and nothing else.
+permissions:
+  contents: read
+
+jobs:
+  determinism:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      # actions/checkout v7.0.1 and actions/setup-python v7.1.0, pinned by commit because a tag can
+      # be moved to point at other code.
+      #
+      # The default depth-1 checkout is deliberate. Naming a spec makes `make verify` run that
+      # spec's scope check, which, without CHANGED_SINCE, diffs from the last commit that touched
+      # harness/contract.lock.json; with full history that diff holds every file changed on main
+      # since then and the check fails on main itself. In a depth-1 checkout the scope and privacy
+      # checks therefore compare HEAD with itself and check nothing here. They are enforced by the
+      # verify workflow, which fetches the full history. This job is for determinism.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up the pinned environment
+        run: make setup PYTHON=python
+
+      - name: Show the platform
+        run: |
+          uname -m
+          .venv/bin/python -c 'import platform, sys; print(platform.machine(), sys.version)'
+
+      - name: Verify LL-0001
+        run: make verify SPEC=LL-0001
+
+      - name: Verify LL-0002
+        # Runs even when LL-0001 fails, so one run reports both fingerprints.
+        if: success() || failure()
+        run: make verify SPEC=LL-0002
