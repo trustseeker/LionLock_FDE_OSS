@@ -1,7 +1,7 @@
 """``redact_dsn`` must never return a secret, whatever form the connection string takes.
 
-It is used where a connection string is shown to a person (``log_token_tool.py --verbose``). A
-string it cannot parse is redacted whole rather than shown.
+It is a public helper for showing a connection string to a person. A string it cannot parse is
+redacted whole rather than shown.
 """
 
 import pytest

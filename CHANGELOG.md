@@ -13,6 +13,13 @@
   release that supports Python 3.14. On 25 November 2026 PyPI listed no security advisories for
   any release these ranges allow. A plain `pip install lionlock` still installs no other package.
 
+### Fixed
+
+- **`scripts/log_token_tool.py register --verbose` no longer prints the database connection
+  string**, not even redacted. A connection string can hold a password, and code scanning
+  (CodeQL, clear-text logging) flagged the redacted output. `--verbose` now only confirms that a
+  connection string was set.
+
 ## 1.0.0b2 — 25 November 2026 — security, integrity and data-preservation fixes
 
 Recommended for everyone on `1.0.0b1`. That release was published before everything below, so an

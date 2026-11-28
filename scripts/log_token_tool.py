@@ -13,7 +13,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from lionlock.logging.connection import build_postgres_dsn, load_dotenv, redact_dsn  # noqa: E402
+from lionlock.logging.connection import build_postgres_dsn, load_dotenv  # noqa: E402
 from lionlock.logging.token_auth import (  # noqa: E402
     generate_token,
     hash_token,
@@ -157,7 +157,8 @@ def cmd_register(args: argparse.Namespace) -> int:
     sys.stdout.write(f"token_id={token_id_value}\n")
     sys.stdout.write(f"token_hash={token_hash}\n")
     if args.verbose:
-        sys.stdout.write(f"db_uri={redact_dsn(dsn)}\n")
+        # The connection string is never printed, not even redacted: it can hold a password.
+        sys.stdout.write("db_uri=set (not shown)\n")
     return 0
 
 
@@ -182,7 +183,9 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--db-uri", default="", help="Postgres URI/DSN for auth_tokens.")
     reg.add_argument("--label", default="", help="Optional label stored with the token hash.")
     reg.add_argument("--scope", default="", help="Optional scope stored with the token hash.")
-    reg.add_argument("--verbose", action="store_true", help="Print redacted DB URI.")
+    reg.add_argument(
+        "--verbose", action="store_true", help="Also confirm that a DB URI was set (never printed)."
+    )
     reg.set_defaults(func=cmd_register)
 
     return parser
