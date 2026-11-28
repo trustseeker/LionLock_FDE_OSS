@@ -103,6 +103,25 @@ def test_streamlit_is_in_the_gui_extra_only() -> None:
     assert "streamlit" in _requirement_names(extras["gui"])
 
 
+def _floor(requirements: list[str], name: str) -> tuple[int, ...]:
+    """The ``>=`` minimum a requirement list gives ``name``, as a tuple of release numbers."""
+    import re
+
+    for item in requirements:
+        match = re.fullmatch(rf"{re.escape(name)}>=([0-9]+(?:\.[0-9]+)*)", item.strip())
+        if match:
+            return tuple(int(part) for part in match.group(1).split("."))
+    raise AssertionError(f"no {name}>= requirement in {requirements}")
+
+
+def test_dev_tools_require_their_current_releases() -> None:
+    # pre-commit 4.7.0 and pip-audit 2.10.1 were the latest releases on 28 November 2026, with no
+    # published advisories. Raising a floor later still passes; lowering it does not.
+    dev = _pyproject()["project"]["optional-dependencies"]["dev"]
+    assert _floor(dev, "pre-commit") >= (4, 7, 0)
+    assert _floor(dev, "pip-audit") >= (2, 10, 1)
+
+
 def test_license_is_an_spdx_expression() -> None:
     project = _pyproject()["project"]
     assert project["license"] == "Apache-2.0"
