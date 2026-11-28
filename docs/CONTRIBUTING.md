@@ -6,9 +6,13 @@ Please follow the [Code of Conduct](../CODE_OF_CONDUCT.md) and use the issue and
 - Create and activate a virtualenv (Python 3.11+):
   `python -m venv --upgrade-deps .venv && source .venv/bin/activate`
   (`--upgrade-deps` replaces the pip, and on Python 3.11 the setuptools, that `venv` bundles;
-  those copies have published advisories). Or run `bash tools/dev_setup.sh`, which does this.
-- Install dev dependencies (includes pytest): `pip install -e ".[dev]"`
+  those copies have published advisories).
+- Install dev dependencies (includes pytest), in the same shell: `pip install -e ".[dev]"`
 - If you skip the editable install, run tests with `PYTHONPATH=src`.
+- Or do all of the above with `bash tools/dev_setup.sh`: it creates `.venv` (or the path in
+  `LIONLOCK_VENV_PATH`), upgrades pip (and setuptools, where `venv` installed it), installs the dev
+  dependencies and runs the tests. It cannot activate the venv in your shell; do that afterwards with
+  `source .venv/bin/activate`.
 
 ## Trust Overlay Smoke Harness
 Run from repo root:
