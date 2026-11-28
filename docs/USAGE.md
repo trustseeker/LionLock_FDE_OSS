@@ -4,9 +4,10 @@
 - Use one virtual environment: a git-ignored `.venv` in the repository by default, or the path in
   `LIONLOCK_VENV_PATH` to keep it outside the project tree (see
   [`VENV_REDIRECT_POLICY.yaml.md`](VENV_REDIRECT_POLICY.yaml.md)). `bash tools/dev_setup.sh` creates
-  it and installs the dev tools. To do it by hand:
+  it and installs the dev tools. To do it by hand (`--upgrade-deps` replaces the pip, and on
+  Python 3.11 the setuptools, that `venv` bundles; those copies have published advisories):
   ```bash
-  python -m venv .venv && source .venv/bin/activate
+  python -m venv --upgrade-deps .venv && source .venv/bin/activate
   pip install -e '.[dev]'
   ```
 

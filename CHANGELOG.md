@@ -32,11 +32,15 @@
   string**, not even redacted. A connection string can hold a password, and code scanning
   (CodeQL, clear-text logging) flagged the redacted output. `--verbose` now only confirms that a
   connection string was set.
-- **`tools/dev_setup.sh` no longer leaves a vulnerable setuptools on Python 3.11.** Python 3.11's
-  `venv` installs setuptools 79.0.1, which has three published advisories (PYSEC-2026-3447,
-  GHSA-xmj3-9gf7-h52w); the script now upgrades it when it is present. On Python 3.12 and later
-  nothing changes, because `venv` installs no setuptools there. LionLock's own build already used
-  setuptools 84.2.1.
+- **The development setup no longer leaves a vulnerable pip or setuptools behind.** `python -m
+  venv` installs the pip, and on Python 3.11 the setuptools, bundled with that Python build, and
+  those copies have published advisories. Which versions they are depends on the build: Python
+  3.11.18 as tested here bundles pip 24.0 and setuptools 79.0.1 (GHSA-h35f-9h28-mq5c,
+  GHSA-xmj3-9gf7-h52w, PYSEC-2026-3447), and Python 3.14.6 bundles pip 26.1.2 (PYSEC-2026-3721).
+  `tools/dev_setup.sh` already upgraded pip and now also upgrades setuptools when it is present,
+  and the manual steps in `docs/CONTRIBUTING.md` and `docs/USAGE.md` now use
+  `python -m venv --upgrade-deps`. Python 3.12 and later install no setuptools, and none is added.
+  LionLock's own build already used setuptools 84.2.1.
 
 ## 1.0.0b2 — 25 November 2026 — security, integrity and data-preservation fixes
 

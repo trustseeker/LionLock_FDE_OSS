@@ -4,7 +4,9 @@ Please follow the [Code of Conduct](../CODE_OF_CONDUCT.md) and use the issue and
 
 ## Setup
 - Create and activate a virtualenv (Python 3.11+):
-  `python -m venv .venv && source .venv/bin/activate`
+  `python -m venv --upgrade-deps .venv && source .venv/bin/activate`
+  (`--upgrade-deps` replaces the pip, and on Python 3.11 the setuptools, that `venv` bundles;
+  those copies have published advisories). Or run `bash tools/dev_setup.sh`, which does this.
 - Install dev dependencies (includes pytest): `pip install -e ".[dev]"`
 - If you skip the editable install, run tests with `PYTHONPATH=src`.
 
