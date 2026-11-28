@@ -37,7 +37,7 @@ Security = "https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/SECURITY.m
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.3",
-  "ruff>=0.5.0",
+  "ruff>=0.17.6",
   "mypy>=1.8.0",
   "pre-commit>=3.6.0",
 
