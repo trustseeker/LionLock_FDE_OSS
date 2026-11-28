@@ -13,12 +13,30 @@
   release that supports Python 3.14. On 25 November 2026 PyPI listed no security advisories for
   any release these ranges allow. A plain `pip install lionlock` still installs no other package.
 
+### Changed
+
+- **The release workflow installs and smoke-tests the sdist as well as the wheel** before anything
+  can be uploaded, each in its own fresh environment outside the checkout. Before, the sdist was
+  only checked with `twine`, so a broken one could have reached PyPI.
+- **The `dev` extra no longer installs Streamlit.** Only the optional GUI uses it, so it is now in
+  the `gui` extra alone (`pip install -e ".[dev,gui]"` for both). A fresh `pip install -e ".[dev]"`
+  installs 47 packages instead of 74.
+- **The `dev` extra requires current tool releases:** `pre-commit>=4.7.0` (was 3.6.0),
+  `pip-audit>=2.10.1` (was 2.7.0) and `ruff>=0.17.6` (was 0.5.0). PyPI listed no advisories for
+  these releases on 28 November 2026. `make verify` still uses the versions pinned in
+  `harness/env/requirements.lock`.
+
 ### Fixed
 
 - **`scripts/log_token_tool.py register --verbose` no longer prints the database connection
   string**, not even redacted. A connection string can hold a password, and code scanning
   (CodeQL, clear-text logging) flagged the redacted output. `--verbose` now only confirms that a
   connection string was set.
+- **`tools/dev_setup.sh` no longer leaves a vulnerable setuptools on Python 3.11.** Python 3.11's
+  `venv` installs setuptools 79.0.1, which has three published advisories (PYSEC-2026-3447,
+  GHSA-xmj3-9gf7-h52w); the script now upgrades it when it is present. On Python 3.12 and later
+  nothing changes, because `venv` installs no setuptools there. LionLock's own build already used
+  setuptools 84.2.1.
 
 ## 1.0.0b2 — 25 November 2026 — security, integrity and data-preservation fixes
 
