@@ -13,12 +13,34 @@
   release that supports Python 3.14. On 25 November 2026 PyPI listed no security advisories for
   any release these ranges allow. A plain `pip install lionlock` still installs no other package.
 
+### Changed
+
+- **The release workflow installs and smoke-tests the sdist as well as the wheel** before anything
+  can be uploaded, each in its own fresh environment outside the checkout. Before, the sdist was
+  only checked with `twine`, so a broken one could have reached PyPI.
+- **The `dev` extra no longer installs Streamlit.** Only the optional GUI uses it, so it is now in
+  the `gui` extra alone (`pip install -e ".[dev,gui]"` for both). A fresh `pip install -e ".[dev]"`
+  installs 47 packages instead of 74.
+- **The `dev` extra requires current tool releases:** `pre-commit>=4.7.0` (was 3.6.0),
+  `pip-audit>=2.10.1` (was 2.7.0) and `ruff>=0.17.6` (was 0.5.0). PyPI listed no advisories for
+  these releases on 28 November 2026. `make verify` still uses the versions pinned in
+  `harness/env/requirements.lock`.
+
 ### Fixed
 
 - **`scripts/log_token_tool.py register --verbose` no longer prints the database connection
   string**, not even redacted. A connection string can hold a password, and code scanning
   (CodeQL, clear-text logging) flagged the redacted output. `--verbose` now only confirms that a
   connection string was set.
+- **The development setup no longer leaves a vulnerable pip or setuptools behind.** `python -m
+  venv` installs the pip, and on Python 3.11 the setuptools, bundled with that Python build, and
+  those copies have published advisories. Which versions they are depends on the build: Python
+  3.11.18 as tested here bundles pip 24.0 and setuptools 79.0.1 (GHSA-h35f-9h28-mq5c,
+  GHSA-xmj3-9gf7-h52w, PYSEC-2026-3447), and Python 3.14.6 bundles pip 26.1.2 (PYSEC-2026-3721).
+  `tools/dev_setup.sh` already upgraded pip and now also upgrades setuptools when it is present,
+  and the manual steps in `docs/CONTRIBUTING.md` and `docs/USAGE.md` now use
+  `python -m venv --upgrade-deps`. Python 3.12 and later install no setuptools, and none is added.
+  LionLock's own build already used setuptools 84.2.1.
 
 ## 1.0.0b2 — 25 November 2026 — security, integrity and data-preservation fixes
 
